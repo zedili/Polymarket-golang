@@ -28,6 +28,12 @@ var (
 	DefaultPolygonRPC = "https://polygon-rpc.com"
 )
 
+// defaultGasFeeCap 用于 eth_call/estimateGas 的默认 GasFeeCap。
+// Polygon Bor v2.6.0 升级后，节点会对 eth_call 校验 baseFee，
+// 如果 CallMsg 不设 GasFeeCap，节点 setDefaults 会填一个极低值导致校验失败。
+// 设置一个足够高的值即可绕过，eth_call 不实际扣费。
+var defaultGasFeeCap = big.NewInt(100e9) // 100 Gwei
+
 // ChainConfig 链配置
 type ChainConfig struct {
 	ChainID           int64
@@ -187,8 +193,9 @@ func (c *BaseWeb3Client) GetPolyProxyAddress(address common.Address) (common.Add
 	}
 
 	msg := ethereum.CallMsg{
-		To:   &c.ExchangeAddress,
-		Data: data,
+		To:        &c.ExchangeAddress,
+		Data:      data,
+		GasFeeCap: defaultGasFeeCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
@@ -214,8 +221,9 @@ func (c *BaseWeb3Client) GetSafeProxyAddress(address common.Address) (common.Add
 	}
 
 	msg := ethereum.CallMsg{
-		To:   &c.SafeProxyFactoryAddress,
-		Data: data,
+		To:        &c.SafeProxyFactoryAddress,
+		Data:      data,
+		GasFeeCap: defaultGasFeeCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
@@ -260,8 +268,9 @@ func (c *BaseWeb3Client) GetUSDCBalance(address common.Address) (*big.Float, err
 	}
 
 	msg := ethereum.CallMsg{
-		To:   &c.USDCAddress,
-		Data: data,
+		To:        &c.USDCAddress,
+		Data:      data,
+		GasFeeCap: defaultGasFeeCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
@@ -299,8 +308,9 @@ func (c *BaseWeb3Client) GetTokenBalance(tokenID string, address common.Address)
 	}
 
 	msg := ethereum.CallMsg{
-		To:   &c.ConditionalTokensAddress,
-		Data: data,
+		To:        &c.ConditionalTokensAddress,
+		Data:      data,
+		GasFeeCap: defaultGasFeeCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
@@ -334,8 +344,9 @@ func (c *BaseWeb3Client) GetTokenComplement(tokenID string) (string, error) {
 	}
 
 	msg := ethereum.CallMsg{
-		To:   &c.NegRiskExchangeAddress,
-		Data: data,
+		To:        &c.NegRiskExchangeAddress,
+		Data:      data,
+		GasFeeCap: defaultGasFeeCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
@@ -354,8 +365,9 @@ func (c *BaseWeb3Client) GetTokenComplement(tokenID string) (string, error) {
 	}
 
 	msg = ethereum.CallMsg{
-		To:   &c.ExchangeAddress,
-		Data: data,
+		To:        &c.ExchangeAddress,
+		Data:      data,
+		GasFeeCap: defaultGasFeeCap,
 	}
 
 	result, err = c.client.CallContract(context.Background(), msg, nil)
@@ -381,8 +393,9 @@ func (c *BaseWeb3Client) GetConditionIDNegRisk(questionID common.Hash) (common.H
 	}
 
 	msg := ethereum.CallMsg{
-		To:   &c.NegRiskAdapterAddress,
-		Data: data,
+		To:        &c.NegRiskAdapterAddress,
+		Data:      data,
+		GasFeeCap: defaultGasFeeCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)

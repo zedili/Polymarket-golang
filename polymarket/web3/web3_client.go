@@ -71,9 +71,10 @@ func (c *PolymarketWeb3Client) buildEOATransaction(to common.Address, data []byt
 
 	// 估算gas
 	gas, err := c.client.EstimateGas(context.Background(), ethereum.CallMsg{
-		From: c.Address,
-		To:   &to,
-		Data: data,
+		From:      c.Address,
+		To:        &to,
+		Data:      data,
+		GasFeeCap: defaultGasFeeCap,
 	})
 	if err != nil {
 		gas = 500000 // 默认值
@@ -122,9 +123,10 @@ func (c *PolymarketWeb3Client) buildProxyTransaction(to common.Address, data []b
 
 	// 估算gas
 	gas, err := c.client.EstimateGas(context.Background(), ethereum.CallMsg{
-		From: c.Address,
-		To:   &to,
-		Data: data,
+		From:      c.Address,
+		To:        &to,
+		Data:      data,
+		GasFeeCap: defaultGasFeeCap,
 	})
 	if err != nil {
 		gas = 500000
@@ -164,8 +166,9 @@ func (c *PolymarketWeb3Client) buildSafeTransaction(to common.Address, data []by
 	}
 
 	result, err := c.client.CallContract(context.Background(), ethereum.CallMsg{
-		To:   &c.Address,
-		Data: safeNonceData,
+		To:        &c.Address,
+		Data:      safeNonceData,
+		GasFeeCap: defaultGasFeeCap,
 	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get safe nonce: %w", err)
@@ -198,9 +201,10 @@ func (c *PolymarketWeb3Client) buildSafeTransaction(to common.Address, data []by
 
 	// 估算gas
 	gas, err := c.client.EstimateGas(context.Background(), ethereum.CallMsg{
-		From: c.Address,
-		To:   &to,
-		Data: data,
+		From:      c.Address,
+		To:        &to,
+		Data:      data,
+		GasFeeCap: defaultGasFeeCap,
 	})
 	if err != nil {
 		gas = 500000
@@ -255,8 +259,9 @@ func (c *PolymarketWeb3Client) getSafeTransactionHash(to common.Address, data []
 	}
 
 	result, err := c.client.CallContract(context.Background(), ethereum.CallMsg{
-		To:   &c.Address,
-		Data: txHashData,
+		To:        &c.Address,
+		Data:      txHashData,
+		GasFeeCap: defaultGasFeeCap,
 	}, nil)
 	if err != nil {
 		return nil, err
@@ -617,9 +622,10 @@ func (c *PolymarketWeb3Client) buildBatchProxyTransaction(calls []ProxyCall) (*t
 
 	// 估算gas
 	gas, err := c.client.EstimateGas(context.Background(), ethereum.CallMsg{
-		From: c.account,
-		To:   &c.ProxyFactoryAddress,
-		Data: proxyData,
+		From:      c.account,
+		To:        &c.ProxyFactoryAddress,
+		Data:      proxyData,
+		GasFeeCap: defaultGasFeeCap,
 	})
 	if err != nil {
 		gas = 15000000 // 默认大的 gas limit

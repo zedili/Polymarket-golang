@@ -441,6 +441,17 @@ polymarket/
 
 ## 更新日志
 
+### v0.2.7 (2026-03-14)
+
+#### Bug 修复
+
+- **修复 Polygon Bor v2.6.0 `eth_call` 兼容性问题** - 所有 `CallMsg` 现在包含 `GasFeeCap` 以绕过新的 baseFee 校验
+  - Bor v2.6.0（[公告](https://forum.polygon.technology/t/bor-v2-6-0-and-erigon-v3-4-0-for-mainnet-and-amoy/21757)）同步了上游 go-ethereum 的 `eth_call` 校验逻辑，节点现在会拒绝 `GasFeeCap` 低于 `baseFee` 的调用
+  - 此前 `CallMsg` 未设置 `GasFeeCap`，节点 `setDefaults` 会填入极低的默认值（0.05 Gwei），远低于实际 baseFee（~96 Gwei）导致校验失败
+  - 在 `base_client.go`、`web3_client.go`、`gasless_client.go` 的所有 `ethereum.CallMsg` 中添加 `defaultGasFeeCap = 100 Gwei`
+  - 仅影响 `eth_call` 和 `estimateGas`（只读调用，不实际扣费），真实交易的 gas price 不受影响
+  - 此问题影响所有 Polygon RPC 提供商，非特定提供商问题
+
 ### v0.2.6 (2026-01-28)
 
 #### Bug 修复
