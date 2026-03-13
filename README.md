@@ -445,11 +445,11 @@ The example programs use the following environment variables:
 
 #### Bug Fixes
 
-- **Fixed Polygon Bor v2.6.0 `eth_call` Compatibility** - All `CallMsg` now include `GasFeeCap` to bypass the new baseFee validation
-  - Bor v2.6.0 ([announcement](https://forum.polygon.technology/t/bor-v2-6-0-and-erigon-v3-4-0-for-mainnet-and-amoy/21757)) synced upstream go-ethereum's `eth_call` validation logic; nodes now reject calls where `GasFeeCap` is lower than `baseFee`
-  - Previously, `CallMsg` omitted `GasFeeCap`, causing the node's `setDefaults` to fill an extremely low default value (0.05 Gwei), which fails against the actual baseFee (~96 Gwei)
-  - Added `defaultCallGasPrice = 100 Gwei` (legacy `GasPrice`) to all `ethereum.CallMsg` in `base_client.go`, `web3_client.go`, and `gasless_client.go`
-  - Uses legacy `GasPrice` instead of EIP-1559 `GasFeeCap` to avoid "both gasPrice and maxFeePerGas specified" conflicts
+- **Fixed Polygon Bor v2.6.0 `eth_call` Compatibility** - All `CallMsg` now explicitly set `GasFeeCap` and `GasTipCap` to bypass the new baseFee validation
+  - Bor v2.6.0 ([announcement](https://forum.polygon.technology/t/bor-v2-6-0-and-erigon-v3-4-0-for-mainnet-and-amoy/21757)) synced upstream go-ethereum's `eth_call` validation logic; nodes now reject calls where `maxFeePerGas` is lower than `baseFee`
+  - Previously, `CallMsg` omitted gas fee fields, causing the node's `CallDefaults` to fill an extremely low default `maxFeePerGas` (0.05 Gwei), which fails against the actual baseFee (~100 Gwei)
+  - Fix: explicitly set both `GasFeeCap` and `GasTipCap` to zero in all `ethereum.CallMsg`. When both are zero, the EVM's `skipCheck` logic (`NoBaseFee && GasFeeCap==0 && GasTipCap==0`) bypasses baseFee validation entirely for `eth_call`
+  - Setting only `GasFeeCap` causes "both gasPrice and maxFeePerGas specified" conflicts; setting only `GasPrice` is ignored by Bor's `CallDefaults`; both fields must be explicitly set
   - This only affects `eth_call` and `estimateGas` (read-only, no actual fees); real transaction gas price remains unchanged
   - Affects all Polygon RPC providers, not provider-specific
 

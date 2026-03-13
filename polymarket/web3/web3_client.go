@@ -74,7 +74,8 @@ func (c *PolymarketWeb3Client) buildEOATransaction(to common.Address, data []byt
 		From:      c.Address,
 		To:        &to,
 		Data:      data,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	})
 	if err != nil {
 		gas = 500000 // 默认值
@@ -126,7 +127,8 @@ func (c *PolymarketWeb3Client) buildProxyTransaction(to common.Address, data []b
 		From:      c.Address,
 		To:        &to,
 		Data:      data,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	})
 	if err != nil {
 		gas = 500000
@@ -168,7 +170,8 @@ func (c *PolymarketWeb3Client) buildSafeTransaction(to common.Address, data []by
 	result, err := c.client.CallContract(context.Background(), ethereum.CallMsg{
 		To:        &c.Address,
 		Data:      safeNonceData,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get safe nonce: %w", err)
@@ -204,7 +207,8 @@ func (c *PolymarketWeb3Client) buildSafeTransaction(to common.Address, data []by
 		From:      c.Address,
 		To:        &to,
 		Data:      data,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	})
 	if err != nil {
 		gas = 500000
@@ -261,7 +265,8 @@ func (c *PolymarketWeb3Client) getSafeTransactionHash(to common.Address, data []
 	result, err := c.client.CallContract(context.Background(), ethereum.CallMsg{
 		To:        &c.Address,
 		Data:      txHashData,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	}, nil)
 	if err != nil {
 		return nil, err
@@ -625,7 +630,8 @@ func (c *PolymarketWeb3Client) buildBatchProxyTransaction(calls []ProxyCall) (*t
 		From:      c.account,
 		To:        &c.ProxyFactoryAddress,
 		Data:      proxyData,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	})
 	if err != nil {
 		gas = 15000000 // 默认大的 gas limit

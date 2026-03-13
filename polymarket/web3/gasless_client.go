@@ -209,7 +209,8 @@ func (c *PolymarketGaslessWeb3Client) buildProxyRelayTransaction(to common.Addre
 		From:      c.GetBaseAddress(),
 		To:        &c.ProxyFactoryAddress,
 		Data:      proxyData,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	})
 	if err != nil {
 		gasLimit = "10000000"
@@ -343,7 +344,8 @@ func (c *PolymarketGaslessWeb3Client) getSafeTransactionHash(to common.Address, 
 	result, err := c.client.CallContract(context.Background(), ethereum.CallMsg{
 		To:        &c.Address,
 		Data:      txHashData,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	}, nil)
 	if err != nil {
 		return nil, err
@@ -679,7 +681,8 @@ func (c *PolymarketGaslessWeb3Client) buildBatchProxyRelayTransaction(calls []Pr
 		From:      c.GetBaseAddress(),
 		To:        &c.ProxyFactoryAddress,
 		Data:      proxyData,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	})
 	if err != nil {
 		gasLimit = "15000000" // 批量操作使用更高的默认 gas limit

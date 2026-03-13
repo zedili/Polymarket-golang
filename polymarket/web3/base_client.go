@@ -28,12 +28,19 @@ var (
 	DefaultPolygonRPC = "https://polygon-rpc.com"
 )
 
-// defaultCallGasPrice 用于 eth_call/estimateGas 的默认 GasPrice。
-// Polygon Bor v2.6.0 升级后，节点会对 eth_call 校验 baseFee，
-// 如果 CallMsg 不设 gas 相关字段，节点 setDefaults 会填一个极低的 maxFeePerGas 导致校验失败。
-// 使用 GasPrice（legacy 模式）而非 GasFeeCap，避免与节点自动填充的字段冲突。
-// eth_call 不实际扣费。
-var defaultCallGasPrice = big.NewInt(100e9) // 100 Gwei
+// callGasFeeCap 和 callGasTipCap 用于 eth_call/estimateGas。
+// Polygon Bor v2.6.0 升级后，节点的 CallDefaults 在 baseFee 存在时，
+// 会为未设置的 maxFeePerGas/maxPriorityFeePerGas 填入极低的默认值，导致 baseFee 校验失败。
+//
+// 解决方案：同时显式设置 GasFeeCap 和 GasTipCap 为 0。
+// 当两者都为 0 时，EVM 的 state_transition 会触发 skipCheck：
+//   skipCheck := st.evm.Config.NoBaseFee && msg.GasFeeCap.BitLen() == 0 && msg.GasTipCap.BitLen() == 0
+// eth_call 的 NoBaseFee=true，所以 skipCheck=true，完全跳过 baseFee 校验。
+// 关键：必须同时设置两个字段（非 nil），否则节点会填入自己的默认值。
+var (
+	callGasFeeCap = new(big.Int) // 0 - 显式设置，阻止节点填默认值
+	callGasTipCap = new(big.Int) // 0 - 显式设置，阻止节点填默认值
+)
 
 // ChainConfig 链配置
 type ChainConfig struct {
@@ -196,7 +203,8 @@ func (c *BaseWeb3Client) GetPolyProxyAddress(address common.Address) (common.Add
 	msg := ethereum.CallMsg{
 		To:        &c.ExchangeAddress,
 		Data:      data,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
@@ -224,7 +232,8 @@ func (c *BaseWeb3Client) GetSafeProxyAddress(address common.Address) (common.Add
 	msg := ethereum.CallMsg{
 		To:        &c.SafeProxyFactoryAddress,
 		Data:      data,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
@@ -271,7 +280,8 @@ func (c *BaseWeb3Client) GetUSDCBalance(address common.Address) (*big.Float, err
 	msg := ethereum.CallMsg{
 		To:        &c.USDCAddress,
 		Data:      data,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
@@ -311,7 +321,8 @@ func (c *BaseWeb3Client) GetTokenBalance(tokenID string, address common.Address)
 	msg := ethereum.CallMsg{
 		To:        &c.ConditionalTokensAddress,
 		Data:      data,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
@@ -347,7 +358,8 @@ func (c *BaseWeb3Client) GetTokenComplement(tokenID string) (string, error) {
 	msg := ethereum.CallMsg{
 		To:        &c.NegRiskExchangeAddress,
 		Data:      data,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
@@ -368,7 +380,8 @@ func (c *BaseWeb3Client) GetTokenComplement(tokenID string) (string, error) {
 	msg = ethereum.CallMsg{
 		To:        &c.ExchangeAddress,
 		Data:      data,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	}
 
 	result, err = c.client.CallContract(context.Background(), msg, nil)
@@ -396,7 +409,8 @@ func (c *BaseWeb3Client) GetConditionIDNegRisk(questionID common.Hash) (common.H
 	msg := ethereum.CallMsg{
 		To:        &c.NegRiskAdapterAddress,
 		Data:      data,
-		GasPrice: defaultCallGasPrice,
+		GasFeeCap: callGasFeeCap,
+		GasTipCap: callGasTipCap,
 	}
 
 	result, err := c.client.CallContract(context.Background(), msg, nil)
