@@ -448,7 +448,8 @@ The example programs use the following environment variables:
 - **Fixed Polygon Bor v2.6.0 `eth_call` Compatibility** - All `CallMsg` now include `GasFeeCap` to bypass the new baseFee validation
   - Bor v2.6.0 ([announcement](https://forum.polygon.technology/t/bor-v2-6-0-and-erigon-v3-4-0-for-mainnet-and-amoy/21757)) synced upstream go-ethereum's `eth_call` validation logic; nodes now reject calls where `GasFeeCap` is lower than `baseFee`
   - Previously, `CallMsg` omitted `GasFeeCap`, causing the node's `setDefaults` to fill an extremely low default value (0.05 Gwei), which fails against the actual baseFee (~96 Gwei)
-  - Added `defaultGasFeeCap = 100 Gwei` to all `ethereum.CallMsg` in `base_client.go`, `web3_client.go`, and `gasless_client.go`
+  - Added `defaultCallGasPrice = 100 Gwei` (legacy `GasPrice`) to all `ethereum.CallMsg` in `base_client.go`, `web3_client.go`, and `gasless_client.go`
+  - Uses legacy `GasPrice` instead of EIP-1559 `GasFeeCap` to avoid "both gasPrice and maxFeePerGas specified" conflicts
   - This only affects `eth_call` and `estimateGas` (read-only, no actual fees); real transaction gas price remains unchanged
   - Affects all Polygon RPC providers, not provider-specific
 
