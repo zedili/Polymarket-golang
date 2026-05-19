@@ -113,6 +113,39 @@ type RelayResponse struct {
 	TransactionHash string `json:"transactionHash"`
 	TransactionID   string `json:"transactionID"`
 	State           string `json:"state"`
+
+	// 失败时 relayer 可能在 body 里给出原因。字段名不固定,先把常见命名都接住。
+	Error   string `json:"error,omitempty"`
+	Message string `json:"message,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	// RawBody 是原始响应字节,只在 State != STATE_NEW/STATE_PENDING/STATE_MINED 时保留,
+	// 方便排查未来出现的新字段(由 submitToRelay 在解析失败/失败状态时填写)。
+	RawBody string `json:"-"`
+}
+
+// FailureDetail 返回一段适合打印 / 包进 error 的字符串,聚合 Error/Message/Reason/RawBody。
+func (r *RelayResponse) FailureDetail() string {
+	parts := make([]string, 0, 4)
+	if r.Error != "" {
+		parts = append(parts, "error="+r.Error)
+	}
+	if r.Message != "" {
+		parts = append(parts, "message="+r.Message)
+	}
+	if r.Reason != "" {
+		parts = append(parts, "reason="+r.Reason)
+	}
+	if len(parts) == 0 && r.RawBody != "" {
+		return "raw=" + r.RawBody
+	}
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += "; "
+		}
+		out += p
+	}
+	return out
 }
 
 // MaxUint256 返回最大uint256值

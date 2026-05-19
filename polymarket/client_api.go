@@ -4,9 +4,13 @@ import (
 	"fmt"
 )
 
-// GetOK 健康检查：确认服务器是否运行
-// 不需要认证
+// GetOK 健康检查:确认服务器是否运行。
+// V1 服务器响应 "/"; V2 推荐使用 "/ok"。本方法优先尝试 V2 端点,
+// 失败时回退到根路径,以兼容老服务器。
 func (c *ClobClient) GetOK() (interface{}, error) {
+	if resp, err := c.httpClient.Get(OK, nil); err == nil {
+		return resp, nil
+	}
 	return c.httpClient.Get("/", nil)
 }
 

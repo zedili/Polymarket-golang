@@ -6,6 +6,7 @@ toolchain go1.24.9
 
 require (
 	github.com/ethereum/go-ethereum v1.16.7
+	github.com/gorilla/websocket v1.5.3
 	github.com/polymarket/go-order-utils v1.22.6
 )
 
@@ -24,7 +25,6 @@ require (
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/google/uuid v1.3.0 // indirect
-	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
 	github.com/supranational/blst v0.3.16-0.20250831170142-f48500c1fdbe // indirect

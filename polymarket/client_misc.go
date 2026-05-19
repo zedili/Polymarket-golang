@@ -3,6 +3,9 @@ package polymarket
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
 )
 
 // CreateReadonlyAPIKey 创建只读API密钥
@@ -192,21 +195,19 @@ func (c *ClobClient) GetMarketTradesEvents(conditionID string) (interface{}, err
 
 // UpdateBalanceAllowance 更新余额和授权
 // 需要L2认证
+//
+// 对齐 py-clob-client-v2:HTTP 方法是 GET(不是 POST);signature_type 从
+// client.sigType 取。
 func (c *ClobClient) UpdateBalanceAllowance(params *BalanceAllowanceParams) (interface{}, error) {
 	if err := c.assertLevel2Auth(); err != nil {
 		return nil, err
 	}
-
-	// 如果signature_type未设置，使用builder的签名类型
-	if params.SignatureType == nil || (params.SignatureType != nil && *params.SignatureType < 0) {
-		if c.builder != nil {
-			sigType := c.builder.GetSigType()
-			params.SignatureType = &sigType
-		} else {
-			// 默认使用0（EOA）
-			defaultSigType := 0
-			params.SignatureType = &defaultSigType
-		}
+	if params == nil {
+		params = &BalanceAllowanceParams{}
+	}
+	if params.SignatureType == nil || *params.SignatureType < 0 {
+		sigType := c.sigType
+		params.SignatureType = &sigType
 	}
 
 	url := AddBalanceAllowanceParamsToURL(c.host+UpdateBalanceAllowance, params)
@@ -229,53 +230,86 @@ func (c *ClobClient) GetOrderBookHash(orderbook *OrderBookSummary) string {
 }
 
 // GetBuilderTrades 获取Builder交易记录
-// 需要Builder认证
-func (c *ClobClient) GetBuilderTrades(params *TradeParams, nextCursor string) ([]interface{}, error) {
-	// TODO: 实现Builder认证检查
-	// 目前使用L2认证作为替代
-	if err := c.assertLevel2Auth(); err != nil {
-		return nil, err
+// GetBuilderTrades 查询 builder 归因下的成交记录(V2)。
+//
+// 对齐 py-clob-client-v2.get_builder_trades:**无需 L2 auth**,服务端通过
+// query 参数中的 builder_code 做归因。builder_code 不能为空 / Bytes32Zero。
+//
+// 参数 params:
+//   - BuilderCode(必填,bytes32 hex)
+//   - 可选过滤:Market / AssetID / MakerAddress / Before / After / ID
+func (c *ClobClient) GetBuilderTrades(params *BuilderTradeParams, nextCursor string) ([]interface{}, error) {
+	if params == nil || params.BuilderCode == "" || params.BuilderCode == Bytes32Zero {
+		return nil, fmt.Errorf("builder_code is required and cannot be zero")
 	}
-
 	if nextCursor == "" {
 		nextCursor = "MA=="
 	}
-
-	requestArgs := &RequestArgs{
-		Method:      "GET",
-		RequestPath: GetBuilderTrades,
-	}
-
-	headers, err := CreateLevel2Headers(c.signer, c.creds, requestArgs)
-	if err != nil {
-		return nil, err
-	}
-
 	var results []interface{}
 	for nextCursor != EndCursor {
-		url := AddQueryTradeParams(c.host+GetBuilderTrades, params, nextCursor)
-		resp, err := c.httpClient.Get(url[len(c.host):], headers)
+		u := addBuilderTradesQuery(c.host+GetBuilderTrades, params, nextCursor)
+		resp, err := c.httpClient.Get(u[len(c.host):], nil) // 无 auth
 		if err != nil {
 			return nil, err
 		}
-
 		respMap, ok := resp.(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("invalid response format")
 		}
-
 		if cursor, ok := respMap["next_cursor"].(string); ok {
 			nextCursor = cursor
 		} else {
 			nextCursor = EndCursor
 		}
-
 		if data, ok := respMap["data"].([]interface{}); ok {
 			results = append(results, data...)
 		}
 	}
-
 	return results, nil
+}
+
+// BuilderTradeParams /builder/trades 查询参数。
+type BuilderTradeParams struct {
+	BuilderCode  string // 必填,bytes32 hex(必须非 zero)
+	ID           string
+	MakerAddress string
+	Market       string
+	AssetID      string
+	Before       int64
+	After        int64
+}
+
+// addBuilderTradesQuery 把 BuilderTradeParams 编码为 query string。
+// 用 url.Values 保证所有过滤字段(market / asset_id / maker_address / id 等)
+// 即使包含 & ? = 空格 #(虽然实际是 hex 不会出现)也能被正确编码。
+func addBuilderTradesQuery(base string, p *BuilderTradeParams, cursor string) string {
+	q := url.Values{}
+	q.Set("builder_code", p.BuilderCode)
+	if p.ID != "" {
+		q.Set("id", p.ID)
+	}
+	if p.MakerAddress != "" {
+		q.Set("maker_address", p.MakerAddress)
+	}
+	if p.Market != "" {
+		q.Set("market", p.Market)
+	}
+	if p.AssetID != "" {
+		q.Set("asset_id", p.AssetID)
+	}
+	if p.Before > 0 {
+		q.Set("before", strconv.FormatInt(p.Before, 10))
+	}
+	if p.After > 0 {
+		q.Set("after", strconv.FormatInt(p.After, 10))
+	}
+	q.Set("next_cursor", cursor)
+
+	sep := "?"
+	if strings.Contains(base, "?") {
+		sep = "&"
+	}
+	return base + sep + q.Encode()
 }
 
 // PostHeartbeat 发送心跳
@@ -286,7 +320,13 @@ func (c *ClobClient) PostHeartbeat(heartbeatID *string) (interface{}, error) {
 		return nil, err
 	}
 
-	body := map[string]interface{}{"heartbeat_id": heartbeatID}
+	// 对齐 py-clob-client-v2.post_heartbeat: body = {"heartbeat_id": "..."}。
+	// Python 默认空字符串而不是 null。
+	id := ""
+	if heartbeatID != nil {
+		id = *heartbeatID
+	}
+	body := map[string]interface{}{"heartbeat_id": id}
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal heartbeat: %w", err)

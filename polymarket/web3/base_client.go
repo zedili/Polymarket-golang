@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -30,30 +31,54 @@ var (
 	DefaultPolygonRPC = "https://polygon-rpc.com"
 )
 
-// ChainConfig 链配置
+// ChainConfig 链配置(V1 + V2)。
+//
+// V2 升级后链上仍然只有一个 USDC、一个 ConditionalTokens、一个 NegRiskAdapter,
+// 但 Exchange 拆成 V1/V2 两组合约。下单走 V2 时,EOA 必须额外把 USDC/CTF
+// 授权给 V2 Exchange,否则撮合时无法转账。
 type ChainConfig struct {
 	ChainID           int64
-	Exchange          common.Address
-	Collateral        common.Address
-	ConditionalTokens common.Address
-	NegRiskExchange   common.Address
+	Exchange          common.Address // V1 CTFExchange
+	Collateral        common.Address // USDC
+	ConditionalTokens common.Address // ERC1155 CTF
+	NegRiskExchange   common.Address // V1 NegRiskCTFExchange
+	ExchangeV2        common.Address // V2 CTFExchange
+	NegRiskExchangeV2 common.Address // V2 NegRiskCTFExchange
 }
 
+// V2 Exchange 地址在 Polygon 和 Amoy 上相同(来自 py-clob-client-v2/config.py)。
+var (
+	exchangeV2Address        = common.HexToAddress("0xE111180000d2663C0091e4f400237545B87B996B")
+	negRiskExchangeV2Address = common.HexToAddress("0xe2222d279d744050d28e00520010520000310F59")
+)
+
 // 链配置映射
+// Collateral 是 pUSD (Polymarket USD, 6 decimals, 0xC011...).
+// V2 已迁离 USDC.e (0x2791...);所有 V1/V2 链上路径(approval、balance、split、
+// merge、redeem、gasless)都必须用 pUSD,否则授权/余额查询会查错 token。
+var pUSDAddress = common.HexToAddress("0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB")
+
 var chainConfigs = map[int64]*ChainConfig{
 	137: { // Polygon 主网
 		ChainID:           137,
 		Exchange:          common.HexToAddress("0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"),
-		Collateral:        common.HexToAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),
+		Collateral:        pUSDAddress,
 		ConditionalTokens: common.HexToAddress("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"),
 		NegRiskExchange:   common.HexToAddress("0xC5d563A36AE78145C45a50134d48A1215220f80a"),
+		ExchangeV2:        exchangeV2Address,
+		NegRiskExchangeV2: negRiskExchangeV2Address,
 	},
 	80002: { // Amoy 测试网
 		ChainID:           80002,
 		Exchange:          common.HexToAddress("0xdFE02Eb6733538f8Ea35D585af8DE5958AD99E40"),
-		Collateral:        common.HexToAddress("0x9c4e1703476e875070ee25b56a58b008cfb8fa78"),
+		Collateral:        pUSDAddress, // 与 py-clob-client-v2 一致使用同一 pUSD
 		ConditionalTokens: common.HexToAddress("0x69308FB512518e39F9b16112fA8d994F4e2Bf8bB"),
-		NegRiskExchange:   common.HexToAddress("0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"),
+		// 历史 bug:这里曾被写成 NegRiskAdapter 地址(0xd91E...),会导致 V1
+		// negRisk approval 漏掉真正的 Exchange。py-clob-client-v2 config.py
+		// (137 + 80002) 都用同一个 0xC5d563... 作为 V1 negRisk exchange。
+		NegRiskExchange:   common.HexToAddress("0xC5d563A36AE78145C45a50134d48A1215220f80a"),
+		ExchangeV2:        exchangeV2Address,
+		NegRiskExchangeV2: negRiskExchangeV2Address,
 	},
 }
 
@@ -88,11 +113,19 @@ type BaseWeb3Client struct {
 	// 合约地址
 	USDCAddress              common.Address
 	ConditionalTokensAddress common.Address
-	ExchangeAddress          common.Address
-	NegRiskExchangeAddress   common.Address
+	ExchangeAddress          common.Address // V1
+	NegRiskExchangeAddress   common.Address // V1 negRisk
+	ExchangeV2Address        common.Address // V2 (CTF Exchange v2)
+	NegRiskExchangeV2Address common.Address // V2 negRisk
 	NegRiskAdapterAddress    common.Address
 	ProxyFactoryAddress      common.Address
 	SafeProxyFactoryAddress  common.Address
+
+	// nonce 缓存 —— 并发 EOA 直签时防 PendingNonceAt race。仅 GetTransactionOpts
+	// 使用,gasless 路径不走链上 nonce。
+	nonceMu     sync.Mutex
+	cachedNonce uint64
+	hasNonce    bool
 }
 
 // NewBaseWeb3Client 创建基础 Web3 客户端
@@ -156,6 +189,8 @@ func NewBaseWeb3Client(
 		ConditionalTokensAddress: config.ConditionalTokens,
 		ExchangeAddress:          config.Exchange,
 		NegRiskExchangeAddress:   config.NegRiskExchange,
+		ExchangeV2Address:        config.ExchangeV2,
+		NegRiskExchangeV2Address: config.NegRiskExchangeV2,
 		NegRiskAdapterAddress:    NegRiskAdapterAddress,
 		ProxyFactoryAddress:      ProxyFactoryAddress,
 		SafeProxyFactoryAddress:  SafeProxyFactoryAddress,
@@ -541,12 +576,26 @@ func (c *BaseWeb3Client) encodeProxy(proxyTxn interface{}) ([]byte, error) {
 	return ProxyFactoryABI.Pack("proxy", []interface{}{proxyTxn})
 }
 
-// GetTransactionOpts 获取交易选项
+// GetTransactionOpts 获取交易选项。
+//
+// nonce 处理:第一次从链上拉,之后本地递增。如果调用方在两次 Opts 之间替换/
+// 拒绝某笔 tx 导致 nonce 跳跃,InvalidateNonce() 会让下次重新从链上同步。
+//
+// 并发安全:nonceMu 保证并发 GetTransactionOpts 调用拿到的 nonce 单调递增。
 func (c *BaseWeb3Client) GetTransactionOpts() (*bind.TransactOpts, error) {
-	nonce, err := c.client.PendingNonceAt(context.Background(), c.account)
-	if err != nil {
-		return nil, err
+	c.nonceMu.Lock()
+	if !c.hasNonce {
+		n, err := c.client.PendingNonceAt(context.Background(), c.account)
+		if err != nil {
+			c.nonceMu.Unlock()
+			return nil, fmt.Errorf("PendingNonceAt: %w", err)
+		}
+		c.cachedNonce = n
+		c.hasNonce = true
 	}
+	nonce := c.cachedNonce
+	c.cachedNonce++
+	c.nonceMu.Unlock()
 
 	gasPrice, err := c.client.SuggestGasPrice(context.Background())
 	if err != nil {
@@ -570,9 +619,54 @@ func (c *BaseWeb3Client) GetTransactionOpts() (*bind.TransactOpts, error) {
 	return auth, nil
 }
 
-// WaitForReceipt 等待交易收据
+// InvalidateNonce 让下次 GetTransactionOpts 重新从链上拉 nonce。
+// 用于:某笔 tx 被链上拒收(replacement underpriced / 同 nonce 被替换),需要 resync。
+func (c *BaseWeb3Client) InvalidateNonce() {
+	c.nonceMu.Lock()
+	c.hasNonce = false
+	c.nonceMu.Unlock()
+}
+
+// WaitForReceipt 等待交易上链(单 confirmation),用 ctx 控超时。
+//
+// 上游 bind.WaitMined 不接受 hash 参数 —— 它要 *types.Transaction(它内部
+// 也是 tx.Hash())。SDK 这里 caller 只有 hash,所以直接走轮询 ethclient
+// TransactionReceipt,语义跟 bind.WaitMined 一致。
+//
+// 注:之前实现是 `bind.WaitMined(ctx, c.client, &types.Transaction{})`,
+// 空 Transaction 的 Hash() 永远是固定零值,等于永远等不到 —— 是真 bug,无人调用所以
+// 没暴露。
 func (c *BaseWeb3Client) WaitForReceipt(txHash common.Hash) (*types.Receipt, error) {
-	return bind.WaitMined(context.Background(), c.client, &types.Transaction{})
+	return c.WaitForReceiptCtx(context.Background(), txHash, 5*time.Minute)
+}
+
+// WaitForReceiptCtx 是 WaitForReceipt 的 ctx + 超时版本。
+//
+// timeout=0 时只受 ctx 控制(不另外加 deadline)。
+// 轮询间隔 2 秒(Polygon 出块 ~2.1s)。
+func (c *BaseWeb3Client) WaitForReceiptCtx(ctx context.Context, txHash common.Hash, timeout time.Duration) (*types.Receipt, error) {
+	if (txHash == common.Hash{}) {
+		return nil, fmt.Errorf("WaitForReceiptCtx: empty txHash")
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		receipt, err := c.client.TransactionReceipt(ctx, txHash)
+		if err == nil {
+			return receipt, nil
+		}
+		// ethereum.NotFound 是预期(还没上链),其他错误也轮询 —— 服务端瞬时 5xx 别 fail
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for receipt %s: %w", txHash.Hex(), ctx.Err())
+		case <-t.C:
+		}
+	}
 }
 
 // Client 返回底层的 ethclient

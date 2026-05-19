@@ -24,16 +24,28 @@ type ClobClient struct {
 	mode         int
 	builder      *obuilder.OrderBuilder
 	httpClient   *HTTPClient
-	
-	// 本地缓存
-	tickSizes    map[string]TickSize
-	negRisk      map[string]bool
-	feeRates     map[string]int
-	
+
+	// V2 扩展
+	sigType         int                                              // V2 signature type
+	funder          string                                           // V2 funder 地址(POLY_1271 时为 deposit wallet)
+	builderConfig   *BuilderConfig                                   // V2 全局 builder 配置
+	builderV2Cache  map[string]*obuilder.ExchangeOrderBuilderV2     // key = contractAddress(lowercased)
+	tokenCondition  map[string]string                                // tokenID -> conditionID
+	marketDetails   map[string]*MarketDetails                        // conditionID -> details
+	feeInfos        map[string]*FeeInfo                              // tokenID -> {rate, exponent}
+	builderFeeRates map[string]*BuilderFeeRate                       // builderCode -> rates
+	cachedVersion   *int                                             // 服务端订单版本(1 或 2)
+	feeSlippage     float64                                          // 平台费率上浮百分比 (0 或 [1,100])
+
+	// 本地缓存(V1)
+	tickSizes map[string]TickSize
+	negRisk   map[string]bool
+	feeRates  map[string]int
+
 	// RFQ客户端
-	rfq          *rfq.RfqClient
-	
-	mu           sync.RWMutex
+	rfq *rfq.RfqClient
+
+	mu sync.RWMutex
 }
 
 // NewClobClient 创建新的CLOB客户端
@@ -50,13 +62,18 @@ func NewClobClient(host string, chainID int, privateKey string, creds *ApiCreds,
 	}
 
 	client := &ClobClient{
-		host:      host,
-		chainID:   chainID,
-		creds:     creds,
-		httpClient: NewHTTPClient(host),
-		tickSizes: make(map[string]TickSize),
-		negRisk:   make(map[string]bool),
-		feeRates:  make(map[string]int),
+		host:            host,
+		chainID:         chainID,
+		creds:           creds,
+		httpClient:      NewHTTPClient(host),
+		tickSizes:       make(map[string]TickSize),
+		negRisk:         make(map[string]bool),
+		feeRates:        make(map[string]int),
+		builderV2Cache:  make(map[string]*obuilder.ExchangeOrderBuilderV2),
+		tokenCondition:  make(map[string]string),
+		marketDetails:   make(map[string]*MarketDetails),
+		feeInfos:        make(map[string]*FeeInfo),
+		builderFeeRates: make(map[string]*BuilderFeeRate),
 	}
 
 	// 创建签名器（如果提供了私钥）
@@ -68,15 +85,24 @@ func NewClobClient(host string, chainID int, privateKey string, creds *ApiCreds,
 		client.signer = signer
 
 		// 创建订单构建器
-		sigType := 0 // 默认EOA
+		sigType := SigTypeEOA
 		if signatureType != nil {
 			sigType = *signatureType
 		}
-		
+
 		funderAddr := signer.Address()
 		if funder != "" {
+			// 防止非法字符串被 common.HexToAddress 静默截断为 0x000...000:
+			// 进而签出一笔"出资人=零地址"的废订单。POLY_1271 路径下尤其严重,
+			// 因为 funder 同时被用作 maker + signer + Deposit Wallet 验证目标。
+			if !common.IsHexAddress(funder) {
+				return nil, fmt.Errorf("invalid funder address: %q (must be a hex Ethereum address)", funder)
+			}
 			funderAddr = funder
 		}
+
+		client.sigType = sigType
+		client.funder = funderAddr
 
 		builder, err := obuilder.NewOrderBuilder(signer, sigType, funderAddr)
 		if err != nil {
@@ -221,19 +247,19 @@ func (c *ClobClient) GetAPICreds() string {
 	return ""
 }
 
-// CreateOrderForRFQ 为RFQ创建签名订单（供RFQ客户端使用，避免循环导入）
+// CreateOrderForRFQ 为 RFQ 创建签名订单(供 rfq 子包使用)。
+//
+// V2 迁移完成后,普通下单走 CreateOrderV2;RFQ 当前仍构造 V1 订单
+// (Polymarket V2 服务端的 RFQ 子系统仍接受 V1 订单格式),所以这里走的是
+// 内部 createOrderV1ForRFQ 路径。
 func (c *ClobClient) CreateOrderForRFQ(args *rfq.OrderCreationArgs) (*rfq.SignedOrderData, error) {
-	// 创建订单参数
-	orderArgs := &OrderArgs{
+	signedOrder, err := c.createOrderV1ForRFQ(&rfqOrderArgsV1{
 		TokenID:    args.TokenID,
 		Price:      args.Price,
 		Size:       args.Size,
 		Side:       args.Side,
-		Expiration: args.Expiration,
-	}
-
-	// 创建签名订单
-	signedOrder, err := c.CreateOrder(orderArgs, nil)
+		Expiration: int64(args.Expiration),
+	})
 	if err != nil {
 		return nil, err
 	}

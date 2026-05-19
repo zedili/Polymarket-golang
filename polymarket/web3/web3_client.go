@@ -419,60 +419,51 @@ func (c *PolymarketWeb3Client) SetConditionalTokensApproval(spender common.Addre
 	return c.Execute(to, data, "Conditional Tokens Approval")
 }
 
-// SetAllApprovals 设置所有必要的授权
+// SetAllApprovals 给 V2 Exchange + NegRiskCtfExchange V2 + NegRiskAdapter + CTF
+// 设置必要的 USDC/CTF approval。
+//
+// V2 迁移之后,SDK 不再为 V1 Exchange 做 approval —— Polymarket 服务端已经
+// 全面切到 V2,新订单都走 V2 Exchange。如果你需要 V1 Exchange 授权(基本只在
+// 处理 V1 时代历史合约状态时才需要),自己手动 SetCollateralApproval。
+//
+// V2 下单的 EOA 必须先跑一次本方法,否则撮合时合约 transferFrom 会失败。
 func (c *PolymarketWeb3Client) SetAllApprovals() ([]*TransactionReceipt, error) {
+	if c.ExchangeV2Address == (common.Address{}) || c.NegRiskExchangeV2Address == (common.Address{}) {
+		return nil, fmt.Errorf("V2 exchange addresses not configured for this chain")
+	}
+
 	var receipts []*TransactionReceipt
+	steps := []struct {
+		name    string
+		approve func() (*TransactionReceipt, error)
+	}{
+		// USDC (pUSD) 授权:被这些合约转走
+		{"ConditionalTokens as spender on USDC (split/merge)",
+			func() (*TransactionReceipt, error) { return c.SetCollateralApproval(c.ConditionalTokensAddress) }},
+		{"CTFExchange (V2) as spender on USDC",
+			func() (*TransactionReceipt, error) { return c.SetCollateralApproval(c.ExchangeV2Address) }},
+		{"NegRiskCtfExchange (V2) as spender on USDC",
+			func() (*TransactionReceipt, error) { return c.SetCollateralApproval(c.NegRiskExchangeV2Address) }},
+		{"NegRiskAdapter as spender on USDC (split/merge)",
+			func() (*TransactionReceipt, error) { return c.SetCollateralApproval(c.NegRiskAdapterAddress) }},
 
-	fmt.Println("Approving ConditionalTokens as spender on USDC")
-	r, err := c.SetCollateralApproval(c.ConditionalTokensAddress)
-	if err != nil {
-		return receipts, err
+		// CTF (ERC1155) 授权:被这些合约 transferFrom 走
+		{"CTFExchange (V2) as spender on ConditionalTokens",
+			func() (*TransactionReceipt, error) { return c.SetConditionalTokensApproval(c.ExchangeV2Address) }},
+		{"NegRiskCtfExchange (V2) as spender on ConditionalTokens",
+			func() (*TransactionReceipt, error) { return c.SetConditionalTokensApproval(c.NegRiskExchangeV2Address) }},
+		{"NegRiskAdapter as spender on ConditionalTokens",
+			func() (*TransactionReceipt, error) { return c.SetConditionalTokensApproval(c.NegRiskAdapterAddress) }},
 	}
-	receipts = append(receipts, r)
-
-	fmt.Println("Approving CTFExchange as spender on USDC")
-	r, err = c.SetCollateralApproval(c.ExchangeAddress)
-	if err != nil {
-		return receipts, err
+	for _, s := range steps {
+		fmt.Println("Approving " + s.name)
+		r, err := s.approve()
+		if err != nil {
+			return receipts, err
+		}
+		receipts = append(receipts, r)
 	}
-	receipts = append(receipts, r)
-
-	fmt.Println("Approving NegRiskCtfExchange as spender on USDC")
-	r, err = c.SetCollateralApproval(c.NegRiskExchangeAddress)
-	if err != nil {
-		return receipts, err
-	}
-	receipts = append(receipts, r)
-
-	fmt.Println("Approving NegRiskAdapter as spender on USDC")
-	r, err = c.SetCollateralApproval(NegRiskAdapterAddress)
-	if err != nil {
-		return receipts, err
-	}
-	receipts = append(receipts, r)
-
-	fmt.Println("Approving CTFExchange as spender on ConditionalTokens")
-	r, err = c.SetConditionalTokensApproval(c.ExchangeAddress)
-	if err != nil {
-		return receipts, err
-	}
-	receipts = append(receipts, r)
-
-	fmt.Println("Approving NegRiskCtfExchange as spender on ConditionalTokens")
-	r, err = c.SetConditionalTokensApproval(c.NegRiskExchangeAddress)
-	if err != nil {
-		return receipts, err
-	}
-	receipts = append(receipts, r)
-
-	fmt.Println("Approving NegRiskAdapter as spender on ConditionalTokens")
-	r, err = c.SetConditionalTokensApproval(NegRiskAdapterAddress)
-	if err != nil {
-		return receipts, err
-	}
-	receipts = append(receipts, r)
-
-	fmt.Println("All approvals set!")
+	fmt.Println("V2 approvals set!")
 	return receipts, nil
 }
 

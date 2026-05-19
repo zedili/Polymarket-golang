@@ -1,14 +1,41 @@
 package polymarket
 
 import (
+	"encoding/base64"
+
 	"github.com/polymarket/go-order-utils/pkg/model"
 )
+
+// base64URLDecode 包装 encoding/base64 URL safe decode。
+func base64URLDecode(s string) ([]byte, error) {
+	return base64.URLEncoding.DecodeString(s)
+}
 
 // ApiCreds API凭证
 type ApiCreds struct {
 	APIKey     string `json:"apiKey"`
 	APISecret  string `json:"secret"`
 	APIPassphrase string `json:"passphrase"`
+
+	// decodedSecret 缓存 base64-url-decoded 的 APISecret 字节,免去每次 HMAC
+	// 签名时重复 decode。**调用方不要手动设置,SDK 会在 SetAPICreds 时填**。
+	// 标签 json:"-" 表示它不会被序列化(避免泄漏到日志)。
+	decodedSecret []byte `json:"-"`
+}
+
+// DecodedSecret 返回 base64 解码后的 APISecret 字节。失败时返回 (nil, err)。
+// 第一次调用会做 decode 并缓存结果,后续调用直接返回 cached 值 —— 用于
+// 高频 HMAC 签名(机器人场景)的 fast path。
+func (a *ApiCreds) DecodedSecret() ([]byte, error) {
+	if len(a.decodedSecret) > 0 {
+		return a.decodedSecret, nil
+	}
+	b, err := base64URLDecode(a.APISecret)
+	if err != nil {
+		return nil, err
+	}
+	a.decodedSecret = b
+	return b, nil
 }
 
 // ReadonlyApiKeyResponse 只读API密钥响应
@@ -30,29 +57,9 @@ type BookParams struct {
 	Side    string `json:"side,omitempty"`
 }
 
-// OrderArgs 限价订单参数
-type OrderArgs struct {
-	TokenID     string  `json:"token_id"`      // 条件代币资产ID
-	Price       float64 `json:"price"`        // 订单价格
-	Size        float64 `json:"size"`         // 条件代币数量
-	Side        string  `json:"side"`         // BUY 或 SELL
-	FeeRateBps  int     `json:"fee_rate_bps"` // 手续费率（基点）
-	Nonce       int     `json:"nonce"`        // 用于链上取消的nonce
-	Expiration  int     `json:"expiration"`    // 订单过期时间戳
-	Taker       string  `json:"taker"`         // 订单接受者地址，零地址表示公开订单
-}
-
-// MarketOrderArgs 市价订单参数
-type MarketOrderArgs struct {
-	TokenID     string    `json:"token_id"`      // 条件代币资产ID
-	Amount      float64   `json:"amount"`       // BUY: 美元金额, SELL: 份额数量
-	Side        string    `json:"side"`          // BUY 或 SELL
-	Price       float64   `json:"price"`        // 订单价格（可选）
-	FeeRateBps  int       `json:"fee_rate_bps"` // 手续费率（基点）
-	Nonce       int       `json:"nonce"`        // 用于链上取消的nonce
-	Taker       string    `json:"taker"`         // 订单接受者地址
-	OrderType   OrderType `json:"order_type"`   // 订单类型
-}
+// V1 订单输入类型 (OrderArgs / MarketOrderArgs) 已在 V2 迁移中删除。
+// 普通下单请用 OrderArgsV2 / MarketOrderArgsV2(见 types_v2.go)。
+// RFQ 内部仍构造 V1 订单,但走 unexported rfqOrderArgsV1,不公开。
 
 // TradeParams 交易查询参数
 type TradeParams struct {
@@ -148,31 +155,46 @@ type RoundConfig struct {
 }
 
 // ContractConfig 合约配置
+// 同时包含 V1 和 V2 的合约地址 —— 以及 USDC、CTF 等公共依赖。
+//
+// 历史上 Go SDK 只暴露一个 Exchange 字段(根据 negRisk 在 V1 标准/V1 negRisk
+// 之间切换)。V2 上线后链上同时存在两组 Exchange 合约,所以本结构改为同时持有
+// 全部地址,具体使用哪个由调用方按 (orderVersion, negRisk) 自行选择。
 type ContractConfig struct {
-	Exchange         string `json:"exchange"`          // 交易所合约地址
-	Collateral       string `json:"collateral"`         // 抵押品代币地址
-	ConditionalTokens string `json:"conditional_tokens"` // 条件代币合约地址
+	// V1 (legacy) 交易所
+	Exchange         string `json:"exchange"`             // V1 CTFExchange
+	NegRiskExchange  string `json:"neg_risk_exchange"`    // V1 NegRiskCTFExchange
+
+	// V2 交易所(对应 py-clob-client-v2)
+	ExchangeV2        string `json:"exchange_v2"`          // V2 CTFExchange
+	NegRiskExchangeV2 string `json:"neg_risk_exchange_v2"` // V2 NegRiskCTFExchange
+
+	// 公共依赖
+	Collateral        string `json:"collateral"`           // ERC20 抵押品 (USDC)
+	ConditionalTokens string `json:"conditional_tokens"`   // ERC1155 条件代币
+	NegRiskAdapter    string `json:"neg_risk_adapter"`     // NegRisk 适配器
 }
 
-// PostOrdersArgs 批量下单参数
-type PostOrdersArgs struct {
-	Order     *model.SignedOrder `json:"order"`
-	OrderType OrderType          `json:"orderType"`
-	PostOnly  bool               `json:"postOnly,omitempty"`
+// GetExchangeForVersion 根据订单版本和 negRisk 标志选择交易所地址。
+// version 取值 1 / 2;version=2 是 V2 默认。
+func (c *ContractConfig) GetExchangeForVersion(version int, negRisk bool) string {
+	if version == 2 {
+		if negRisk {
+			return c.NegRiskExchangeV2
+		}
+		return c.ExchangeV2
+	}
+	if negRisk {
+		return c.NegRiskExchange
+	}
+	return c.Exchange
 }
 
-// SignedOrder 已签名的订单（包装go-order-utils的SignedOrder）
+// SignedOrder 已签名的 V1 订单(包装 go-order-utils.SignedOrder)。
+// V2 迁移后,普通下单不再使用此类型 —— 见 SignedOrderV2 (order_builder)。
+// 保留是因为 RFQ 内部路径仍需要 V1 订单格式。
 type SignedOrder = model.SignedOrder
 
-// PostOrderResult 提交订单的结果，包含原始请求和响应
-type PostOrderResult struct {
-	Payload  map[string]interface{} `json:"payload"`  // 原始 POST 请求体
-	Response interface{}            `json:"response"` // API 响应
-}
-
-// PostOrdersResult 批量提交订单的结果
-type PostOrdersResult struct {
-	Payload  []map[string]interface{} `json:"payload"`  // 原始 POST 请求体
-	Response interface{}              `json:"response"` // API 响应
-}
+// V1 PostOrdersArgs / PostOrderResult / PostOrdersResult 已在 V2 迁移中删除。
+// 批量 / 单笔下单的返回类型见 PostOrdersResultV2 / PostOrderResultV2(types_v2.go)。
 

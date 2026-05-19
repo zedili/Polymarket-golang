@@ -8,9 +8,28 @@
 # Test binary
 *.test
 
-# Compiled binaries (Go)
+# Compiled binaries (Go) —— go run/build 在项目根产生的可执行文件没有扩展名
 check_positions
 ethcall_probe
+place_order
+btc_5min_test
+gasless_batch_redeem
+wrap_usdce
+sell_position
+ws_demo
+v2_full_test
+test_*
+
+# === 敏感信息防护 ===
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*credentials*
+*secret*
+wallet*.json
 
 # Output of the go coverage tool
 *.out

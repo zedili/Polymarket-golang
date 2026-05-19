@@ -24,10 +24,11 @@ import (
 // - Safe/Gnosis钱包 (signature_type=2)
 type PolymarketGaslessWeb3Client struct {
 	*BaseWeb3Client
-	signer       *polymarket.Signer
-	relayConfig  RelayConfig
-	builderCreds *polymarket.ApiCreds
-	httpClient   *http.Client
+	signer          *polymarket.Signer
+	relayConfig     RelayConfig
+	builderCreds    *polymarket.ApiCreds
+	httpClient      *http.Client
+	minConfirmations uint64 // 0 = 1 confirmation (legacy); >=1 = 等到 chain head ≥ receipt.BlockNumber + N
 }
 
 // NewPolymarketGaslessWeb3Client 创建新的PolymarketGaslessWeb3Client
@@ -57,8 +58,23 @@ func NewPolymarketGaslessWeb3Client(
 		signer:         signer,
 		relayConfig:    DefaultRelayConfig,
 		builderCreds:   builderCreds,
-		httpClient:     &http.Client{},
+		// 关键:用带超时 + 共享 Transport 的 http.Client。
+		//   - 零超时 + 默认 Transport 时 hung relay 会永远 block 调用方
+		//   - 没有连接池每次 relay call 都 TCP/TLS handshake(~50-150ms)
+		httpClient: &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: sharedRelayTransport,
+		},
+		minConfirmations: 0, // 1 confirmation;调用方按需 SetMinConfirmations(3) 抗 reorg
 	}, nil
+}
+
+// SetMinConfirmations 设置返回 receipt 前要等的最小确认数。
+// 0 / 1 = 1 confirmation(看到 receipt 立返)。
+// >=2 = 等到 chain head ≥ receipt.BlockNumber + N。Polygon reorg 罕见但理论上
+// 1 个 block 不安全;做严肃的 PnL 跟踪建议 N=3。
+func (c *PolymarketGaslessWeb3Client) SetMinConfirmations(n uint64) {
+	c.minConfirmations = n
 }
 
 // Execute 通过无gas中继执行交易
@@ -92,9 +108,7 @@ func (c *PolymarketGaslessWeb3Client) Execute(to common.Address, data []byte, op
 		return nil, err
 	}
 
-	fmt.Printf("Gasless txn submitted: %s\n", resp.TransactionHash)
-	fmt.Printf("Transaction ID: %s\n", resp.TransactionID)
-	fmt.Printf("State: %s\n", resp.State)
+	logf("Gasless txn submitted: %s (txID=%s state=%s)", resp.TransactionHash, resp.TransactionID, resp.State)
 
 	// 等待确认
 	if resp.TransactionHash != "" {
@@ -102,17 +116,21 @@ func (c *PolymarketGaslessWeb3Client) Execute(to common.Address, data []byte, op
 		if err != nil {
 			return nil, err
 		}
-
 		if receipt.Status == 1 {
-			fmt.Printf("%s succeeded\n", operationName)
+			logf("%s succeeded (tx=%s)", operationName, resp.TransactionHash)
 		} else {
-			fmt.Printf("%s failed\n", operationName)
+			logf("%s failed (tx=%s)", operationName, resp.TransactionHash)
 		}
-
 		return receipt, nil
 	}
 
-	return nil, fmt.Errorf("no transaction hash in response: %+v", resp)
+	// 同 ExecuteBatch:relayer 拒收时把它给出的细节暴露出来。
+	detail := resp.FailureDetail()
+	if detail == "" {
+		detail = "no failure detail returned by relayer"
+	}
+	return nil, fmt.Errorf("gasless %s rejected by relayer (state=%s, txID=%s): %s",
+		operationName, resp.State, resp.TransactionID, detail)
 }
 
 // getRelayNonce 获取中继nonce
@@ -430,16 +448,21 @@ func (c *PolymarketGaslessWeb3Client) submitToRelay(body *RelaySubmitRequest, he
 	}
 	defer resp.Body.Close()
 
+	// 一次性读完 body 既能在 HTTP error 时打印,又能在 STATE_FAILED 时让上层
+	// 看到 relayer 给出的额外字段(error/message/reason 或我们暂时没建模的字段)。
+	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("relay error: %s", string(respBody))
+		return nil, fmt.Errorf("relay error %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result RelayResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode relay response: %w", err)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode relay response: %w; raw=%s", err, string(respBody))
 	}
-
+	// 任何非成功状态都把原始 body 留下,方便诊断 —— 不需要重新发请求。
+	if result.State != "" && result.State != "STATE_NEW" && result.State != "STATE_PENDING" && result.State != "STATE_MINED" {
+		result.RawBody = string(respBody)
+	}
 	return &result, nil
 }
 
@@ -456,6 +479,12 @@ func (c *PolymarketGaslessWeb3Client) waitForReceipt(txHash common.Hash) (*Trans
 	for {
 		receipt, err := c.client.TransactionReceipt(context.Background(), txHash)
 		if err == nil {
+			// minConfirmations > 1: 等到 head ≥ receipt.BlockNumber + N-1
+			if c.minConfirmations > 1 {
+				if err := c.waitForConfirmations(receipt.BlockNumber.Uint64(), deadline, pollInterval); err != nil {
+					return nil, err
+				}
+			}
 			return FromEthReceipt(receipt, c.account), nil
 		}
 
@@ -467,6 +496,33 @@ func (c *PolymarketGaslessWeb3Client) waitForReceipt(txHash common.Hash) (*Trans
 		// 等待后重试
 		time.Sleep(pollInterval)
 	}
+}
+
+// waitForConfirmations 阻塞直到 head ≥ receiptBN + (minConfirmations-1) 或超时。
+func (c *PolymarketGaslessWeb3Client) waitForConfirmations(receiptBN uint64, deadline time.Time, pollInterval time.Duration) error {
+	required := receiptBN + c.minConfirmations - 1
+	for {
+		head, err := c.client.BlockNumber(context.Background())
+		if err == nil && head >= required {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for %d confirmations (head=%d, need=%d)", c.minConfirmations, head, required)
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
+// sharedRelayTransport relayer HTTP 调用共用的 Transport,连接池 + HTTP/2 + 合理超时。
+// 不和 SDK 主 httpClient 共享(主 client 配置更激进),但等量级。
+var sharedRelayTransport = &http.Transport{
+	MaxIdleConns:        20,
+	MaxIdleConnsPerHost: 10,
+	IdleConnTimeout:     90 * time.Second,
+	TLSHandshakeTimeout: 10 * time.Second,
+	WriteBufferSize:     16 << 10,
+	ReadBufferSize:      16 << 10,
+	ForceAttemptHTTP2:   true,
 }
 
 // SplitPosition 分割USDC为两个互补头寸
@@ -552,11 +608,27 @@ func (c *PolymarketGaslessWeb3Client) ConvertPositions(questionIDs []string, amo
 	return c.Execute(to, data, "Convert Positions", "convert")
 }
 
-// RedeemRequest 赎回请求
+// RedeemRequest 赎回请求。
+//
+// Collateral 字段决定 ConditionalTokens.redeemPositions 时传入的 collateral
+// token。**这必须与该 condition 创建时使用的 collateral 一致**,否则合约会
+// 按错误的 collateral 计算 positionId,余额查到 0、redeem 无效、relayer 在
+// simulate 时会 STATE_FAILED。
+//
+//   - V1 时代(2026-05 V2 升级前)创建的 condition:USDC.e
+//     (0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174)
+//   - V2 创建的 condition:pUSD (0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB)
+//
+// 空(零地址)时 fallback 到 client.USDCAddress(SDK 当前默认 = pUSD),适合
+// 纯 V2 钱包;混合或老钱包请按每个 condition 显式填。
+//
+// NegRisk=true 路径走 NegRiskAdapter,这块 Polymarket 内部隐式持有 collateral,
+// 不需要外部传入,Collateral 字段被忽略。
 type RedeemRequest struct {
 	ConditionID common.Hash
 	Amounts     []float64
 	NegRisk     bool
+	Collateral  common.Address // 可选;零地址 = 用 client.USDCAddress
 }
 
 // RedeemPositions 批量赎回多个头寸（单次 gasless 交易）
@@ -583,7 +655,12 @@ func (c *PolymarketGaslessWeb3Client) RedeemPositions(requests []RedeemRequest) 
 			data, err = NegRiskAdapterABI.Pack("redeemPositions", req.ConditionID, intAmounts)
 		} else {
 			to = c.ConditionalTokensAddress
-			data, err = ConditionalTokensABI.Pack("redeemPositions", c.USDCAddress, HashZero, req.ConditionID, []*big.Int{big.NewInt(1), big.NewInt(2)})
+			// 必须用 condition 创建时实际使用的 collateral,见 RedeemRequest 字段注释。
+			collateral := req.Collateral
+			if (collateral == common.Address{}) {
+				collateral = c.USDCAddress
+			}
+			data, err = ConditionalTokensABI.Pack("redeemPositions", collateral, HashZero, req.ConditionID, []*big.Int{big.NewInt(1), big.NewInt(2)})
 		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode redeem for condition %s: %w", req.ConditionID.Hex(), err)
@@ -598,6 +675,57 @@ func (c *PolymarketGaslessWeb3Client) RedeemPositions(requests []RedeemRequest) 
 	}
 
 	return c.ExecuteBatch(calls, "Batch Redeem Positions", "batch_redeem")
+}
+
+// WrapUSDCeToPUSD 把 proxy 钱包里的 USDC.e wrap 成 pUSD,走 gasless relay。
+//
+// 背景:
+//   - V1 时代(2026-05 前)所有 condition 用 USDC.e 抵押;V2 升级后官方抵押物
+//     切换到 pUSD(0xC011…)。
+//   - V1 condition 的 redeem / position 兑付仍然出 USDC.e,所以 V2 之后只要
+//     还在 redeem 老条件,就会留下 USDC.e 余额。
+//   - Polymarket UI 把这种 USDC.e 余额显示为 "Pending deposit",点 Confirm
+//     就是走 CollateralOnramp.wrap() —— SDK 这边对应这个方法。
+//
+// 实现:用 PolyProxy 的 batch proxy 调用一次性提交:
+//
+//	1. USDC.e.approve(CollateralOnramp, amount)
+//	2. CollateralOnramp.wrap(USDC.e, proxy, amount)
+//
+// 不走 batch 而是分两次单调用也行,但 batch 只有一次 relay 往返、更原子。
+//
+// amount 单位是浮点的 USDC.e(6 dec),内部转 ToWei(amount, 6)。
+// recipient 为零地址时默认 = proxy 钱包自己(常见用法)。
+//
+// 仅支持 SignatureType=PolyProxy(1)。Safe(2)请走单独的 Safe 实现,这里直接报错。
+func (c *PolymarketGaslessWeb3Client) WrapUSDCeToPUSD(amount float64, recipient common.Address) (*TransactionReceipt, error) {
+	if amount <= 0 {
+		return nil, fmt.Errorf("wrap amount must be > 0, got %v", amount)
+	}
+	if c.signatureType != SignatureTypePolyProxy {
+		return nil, fmt.Errorf("WrapUSDCeToPUSD only supports SignatureType=PolyProxy(1); got %d", c.signatureType)
+	}
+
+	to := recipient
+	if (to == common.Address{}) {
+		to = c.GetBaseAddress() // proxy 地址
+	}
+	amountInt := ToWei(amount, 6)
+
+	approveData, err := EncodeApproveUSDCeToOnramp(amountInt)
+	if err != nil {
+		return nil, fmt.Errorf("encode USDC.e approve: %w", err)
+	}
+	wrapData, err := EncodeWrapUSDCe(to, amountInt)
+	if err != nil {
+		return nil, fmt.Errorf("encode wrap: %w", err)
+	}
+
+	calls := []ProxyCall{
+		{TypeCode: 1, To: CollateralUSDCe, Value: big.NewInt(0), Data: approveData},
+		{TypeCode: 1, To: CollateralOnramp, Value: big.NewInt(0), Data: wrapData},
+	}
+	return c.ExecuteBatch(calls, "Wrap USDC.e -> pUSD", "wrap_usdce")
 }
 
 // ExecuteBatch 通过无gas中继执行批量交易
@@ -627,9 +755,7 @@ func (c *PolymarketGaslessWeb3Client) ExecuteBatch(calls []ProxyCall, operationN
 		return nil, err
 	}
 
-	fmt.Printf("Gasless batch txn submitted: %s\n", resp.TransactionHash)
-	fmt.Printf("Transaction ID: %s\n", resp.TransactionID)
-	fmt.Printf("State: %s\n", resp.State)
+	logf("Gasless batch txn submitted: %s (txID=%s state=%s)", resp.TransactionHash, resp.TransactionID, resp.State)
 
 	// 等待确认
 	if resp.TransactionHash != "" {
@@ -637,17 +763,22 @@ func (c *PolymarketGaslessWeb3Client) ExecuteBatch(calls []ProxyCall, operationN
 		if err != nil {
 			return nil, err
 		}
-
 		if receipt.Status == 1 {
-			fmt.Printf("%s succeeded\n", operationName)
+			logf("%s succeeded (tx=%s)", operationName, resp.TransactionHash)
 		} else {
-			fmt.Printf("%s failed\n", operationName)
+			logf("%s failed (tx=%s)", operationName, resp.TransactionHash)
 		}
-
 		return receipt, nil
 	}
 
-	return nil, fmt.Errorf("no transaction hash in response: %+v", resp)
+	// relayer 直接拒收(同步 STATE_FAILED 之类),把它给出的失败原因暴露出来。
+	// 常见原因:simulation revert、内部某个 call revert、payload 校验失败。
+	detail := resp.FailureDetail()
+	if detail == "" {
+		detail = "no failure detail returned by relayer"
+	}
+	return nil, fmt.Errorf("gasless %s rejected by relayer (state=%s, txID=%s): %s",
+		operationName, resp.State, resp.TransactionID, detail)
 }
 
 // buildBatchProxyRelayTransaction 构建批量Proxy中继交易

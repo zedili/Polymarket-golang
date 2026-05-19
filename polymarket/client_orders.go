@@ -5,104 +5,12 @@ import (
 	"fmt"
 )
 
-// PostOrder 提交订单
-// 需要L2认证
-// 返回 PostOrderResult，包含原始 Payload 和 API 响应
-func (c *ClobClient) PostOrder(order *SignedOrder, orderType OrderType) (*PostOrderResult, error) {
-	return c.PostOrderWithOptions(order, orderType, false)
-}
-
-// PostOrderWithOptions 提交订单（支持 PostOnly 选项）
-// postOnly 订单只能是 GTC 或 GTD 类型
-// 需要L2认证
-// 返回 PostOrderResult，包含原始 Payload 和 API 响应
-func (c *ClobClient) PostOrderWithOptions(order *SignedOrder, orderType OrderType, postOnly bool) (*PostOrderResult, error) {
-	if postOnly && orderType != OrderTypeGTC && orderType != OrderTypeGTD {
-		return nil, fmt.Errorf("post_only orders can only be of type GTC or GTD")
-	}
-
-	if err := c.assertLevel2Auth(); err != nil {
-		return nil, err
-	}
-
-	body := OrderToJSONWithPostOnly(order, c.creds.APIKey, orderType, postOnly)
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal order: %w", err)
-	}
-	bodyStr := string(bodyJSON)
-
-	requestArgs := &RequestArgs{
-		Method:        "POST",
-		RequestPath:   PostOrder,
-		Body:          body,
-		SerializedBody: &bodyStr,
-	}
-
-	headers, err := CreateLevel2Headers(c.signer, c.creds, requestArgs)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Post(PostOrder, headers, bodyStr)
-	if err != nil {
-		return nil, err
-	}
-
-	return &PostOrderResult{
-		Payload:  body,
-		Response: resp,
-	}, nil
-}
-
-// PostOrders 批量提交订单
-// 需要L2认证
-// 返回 PostOrdersResult，包含原始 Payload 和 API 响应
-func (c *ClobClient) PostOrders(args []PostOrdersArgs) (*PostOrdersResult, error) {
-	if err := c.assertLevel2Auth(); err != nil {
-		return nil, err
-	}
-
-	// 验证 PostOnly 订单类型
-	for _, arg := range args {
-		if arg.PostOnly && arg.OrderType != OrderTypeGTC && arg.OrderType != OrderTypeGTD {
-			return nil, fmt.Errorf("post_only orders can only be of type GTC or GTD")
-		}
-	}
-
-	body := make([]map[string]interface{}, len(args))
-	for i, arg := range args {
-		body[i] = OrderToJSONWithPostOnly(arg.Order, c.creds.APIKey, arg.OrderType, arg.PostOnly)
-	}
-
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal orders: %w", err)
-	}
-	bodyStr := string(bodyJSON)
-
-	requestArgs := &RequestArgs{
-		Method:        "POST",
-		RequestPath:   PostOrders,
-		Body:          body,
-		SerializedBody: &bodyStr,
-	}
-
-	headers, err := CreateLevel2Headers(c.signer, c.creds, requestArgs)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Post(PostOrders, headers, bodyStr)
-	if err != nil {
-		return nil, err
-	}
-
-	return &PostOrdersResult{
-		Payload:  body,
-		Response: resp,
-	}, nil
-}
+// 注意:V2 迁移完成后,本文件不再提供 PostOrder / PostOrders / PostOrderWithOptions
+// (V1) 系列方法。下单走 V2:
+//   - 单个限价/市价:CreateAndPostOrderV2 / CreateAndPostMarketOrderV2
+//   - 单独构造/提交:CreateOrderV2 + PostOrderV2、CreateMarketOrderV2 + PostOrderV2
+//   - 批量:PostOrdersV2
+// 下面保留的是与订单版本无关的 L2 操作:取消、查询、余额、通知。
 
 // Cancel 取消订单
 // 需要L2认证
@@ -332,21 +240,19 @@ func (c *ClobClient) GetTrades(params *TradeParams, nextCursor string) ([]interf
 
 // GetBalanceAllowance 获取余额和授权
 // 需要L2认证
+//
+// 对齐 py-clob-client-v2:signature_type 参数总是从 client.sigType 取,
+// 调用方传入的 params.SignatureType 若未设置则按客户端 sigType 填。
 func (c *ClobClient) GetBalanceAllowance(params *BalanceAllowanceParams) (map[string]interface{}, error) {
 	if err := c.assertLevel2Auth(); err != nil {
 		return nil, err
 	}
-
-	// 如果signature_type未设置，使用builder的签名类型
-	if params.SignatureType == nil || (params.SignatureType != nil && *params.SignatureType < 0) {
-		if c.builder != nil {
-			sigType := c.builder.GetSigType()
-			params.SignatureType = &sigType
-		} else {
-			// 默认使用0（EOA）
-			defaultSigType := 0
-			params.SignatureType = &defaultSigType
-		}
+	if params == nil {
+		params = &BalanceAllowanceParams{}
+	}
+	if params.SignatureType == nil || *params.SignatureType < 0 {
+		sigType := c.sigType
+		params.SignatureType = &sigType
 	}
 
 	url := AddBalanceAllowanceParamsToURL(c.host+GetBalanceAllowance, params)
@@ -375,17 +281,15 @@ func (c *ClobClient) GetBalanceAllowance(params *BalanceAllowanceParams) (map[st
 
 // GetNotifications 获取通知
 // 需要L2认证
+//
+// 对齐 py-clob-client-v2:signature_type query 参数从客户端 sigType 取
+// (Proxy/Safe/POLY_1271 用户会被服务端按对应钱包过滤通知)。
 func (c *ClobClient) GetNotifications() (interface{}, error) {
 	if err := c.assertLevel2Auth(); err != nil {
 		return nil, err
 	}
 
-	sigType := 0
-	if c.builder != nil {
-		// 这里需要从builder获取sigType，暂时设为0
-	}
-
-	url := fmt.Sprintf("%s?signature_type=%d", GetNotifications, sigType)
+	url := fmt.Sprintf("%s?signature_type=%d", GetNotifications, c.sigType)
 	requestArgs := &RequestArgs{
 		Method:      "GET",
 		RequestPath: GetNotifications,

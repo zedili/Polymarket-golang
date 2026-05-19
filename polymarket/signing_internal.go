@@ -103,47 +103,76 @@ func SignClobAuthMessage(signer *Signer, timestamp int, nonce int) (string, erro
 	return signature, nil
 }
 
-// BuildHMACSignature 构建HMAC签名（L2认证）
+// BuildHMACSignature 构建 HMAC 签名(L2 认证)。
+//
+// 关键约束:HMAC 签的字符串必须 byte-for-byte 等于实际发送给 API 的 body,
+// 否则服务端会返回 401。本函数本身不会重新序列化对象,而是要求 body 已是
+// 字符串(或 *string)。如果传入其他类型,本函数会调用 MarshalCompact 做一次
+// 紧凑 JSON 序列化作为最后兜底,但调用方应该尽量自己提前序列化并把同一份
+// 字符串同时用于 HMAC 与 HTTP body。
+//
+// 对照 py-clob-client-v2: build_hmac_signature(secret, ts, method, path, body)
+// body 在 V2 中始终是预序列化的字符串(serialized_body),与本实现一致。
+//
+// 性能:secret 解码每次调用都跑;高频(机器人)场景下应通过 BuildHMACSignatureRaw
+// 传入预解码的 []byte secret 来省掉 base64 decode。
 func BuildHMACSignature(secret string, timestamp int, method string, requestPath string, body interface{}) (string, error) {
-	// Base64解码secret
 	base64Secret, err := base64.URLEncoding.DecodeString(secret)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode secret: %w", err)
 	}
+	return BuildHMACSignatureRaw(base64Secret, timestamp, method, requestPath, body)
+}
 
-	// 构建消息
+// BuildHMACSignatureRaw 是 BuildHMACSignature 的快速路径,跳过每次 base64 decode。
+// 用 ApiCreds.DecodedSecret() 拿到预解码后的密钥。
+func BuildHMACSignatureRaw(secretBytes []byte, timestamp int, method string, requestPath string, body interface{}) (string, error) {
 	message := strconv.Itoa(timestamp) + method + requestPath
 	if body != nil {
-		// 将body转换为JSON字符串
-		// 注意：必须使用带空格的JSON格式，否则API会返回401错误
-		// 参考: https://github.com/Polymarket/py-clob-client/issues/164
-		var bodyStr string
-		if bodyStrPtr, ok := body.(*string); ok {
-			// 如果已经是字符串指针，直接使用
-			bodyStr = *bodyStrPtr
-		} else if bodyStrVal, ok := body.(string); ok {
-			// 如果已经是字符串，直接使用
-			bodyStr = bodyStrVal
-		} else {
-			// 序列化为JSON（紧凑格式，无空格）
-			// 参考: https://github.com/Polymarket/py-clob-client/issues/164
-			// API要求JSON必须去掉所有空格，否则会返回401错误
-			bodyBytes, err := json.Marshal(body)
-			if err != nil {
-				return "", fmt.Errorf("failed to marshal body for HMAC signing: %w", err)
-			}
-			bodyStr = string(bodyBytes)
+		bodyStr, err := normalizeBodyForHMAC(body)
+		if err != nil {
+			return "", err
 		}
 		message += bodyStr
 	}
-
-	// HMAC-SHA256
-	mac := hmac.New(sha256.New, base64Secret)
+	mac := hmac.New(sha256.New, secretBytes)
 	mac.Write([]byte(message))
 	digest := mac.Sum(nil)
-
-	// Base64编码
 	return base64.URLEncoding.EncodeToString(digest), nil
+}
+
+// MarshalCompact 用紧凑 JSON 序列化任意 Go 值,等价于 Python
+// json.dumps(x, separators=(",",":"), ensure_ascii=False)。
+// 输出字符串既可用于 HMAC 签名,也可直接作为 HTTP body 发送。
+//
+// 注意:Go 的 json.Marshal 对 map 的 key 排序与 Python json.dumps 一致
+// (按 key 字母排序),所以同一 Go map 多次序列化的结果是稳定的;但跨语言/
+// 跨实现请仍以预序列化字符串为准。
+func MarshalCompact(v interface{}) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("marshal compact: %w", err)
+	}
+	return string(b), nil
+}
+
+// normalizeBodyForHMAC 是 BuildHMACSignature 内部 helper。
+func normalizeBodyForHMAC(body interface{}) (string, error) {
+	switch v := body.(type) {
+	case string:
+		return v, nil
+	case *string:
+		if v == nil {
+			return "", nil
+		}
+		return *v, nil
+	case []byte:
+		return string(v), nil
+	default:
+		// 兜底序列化 —— 强烈建议调用方自己提前 marshal,以保证 HMAC 签的内容
+		// 与 HTTP body 完全一致。
+		return MarshalCompact(body)
+	}
 }
 
 // CreateLevel1Headers 创建L1认证头
@@ -183,6 +212,9 @@ func CreateLevel1Headers(signer *Signer, nonce *int) (map[string]string, error) 
 }
 
 // CreateLevel2Headers 创建L2认证头
+//
+// 性能:走 ApiCreds.DecodedSecret() 取预解码后的 secret 字节(首次 decode、
+// 后续 cache 命中),省掉每次签名的 base64 decode。
 func CreateLevel2Headers(signer *Signer, creds *ApiCreds, requestArgs *RequestArgs) (map[string]string, error) {
 	timestamp := int(time.Now().Unix())
 
@@ -194,8 +226,13 @@ func CreateLevel2Headers(signer *Signer, creds *ApiCreds, requestArgs *RequestAr
 		bodyForSig = requestArgs.Body
 	}
 
-	hmacSig, err := BuildHMACSignature(
-		creds.APISecret,
+	secretBytes, err := creds.DecodedSecret()
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode secret: %w", err)
+	}
+
+	hmacSig, err := BuildHMACSignatureRaw(
+		secretBytes,
 		timestamp,
 		requestArgs.Method,
 		requestArgs.RequestPath,
