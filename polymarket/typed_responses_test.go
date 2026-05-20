@@ -11,12 +11,12 @@ func TestDecodeOrdersList(t *testing.T) {
 	// 真实 V2 服务端的 OpenOrder 响应字段(从 docs.polymarket.com /api-reference/trade/get-user-orders)
 	raw := []interface{}{
 		map[string]interface{}{
-			"id":             "0xc976a32babf0b64801cda48704054b1772624f76ded1c7ac88fa29ad7f1844cb",
+			"id":             "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
 			"status":         "LIVE",
-			"owner":          "77fb58cb-362f-51b3-8c8c-7e65d8583637",
-			"maker_address":  "0xc16bDe710291149EFAd2e8bDaeB7FF9fCeB22B55",
-			"market":         "0x384e2707bbb95da4bfa6f330fe7d5ccbec1c0a85e20be900cbf599987588e1a4",
-			"asset_id":       "78433024518676680431174478322854148606578065650008220678402966840627347604025",
+			"owner":          "00000000-0000-0000-0000-000000000000",
+			"maker_address":  "0x1111111111111111111111111111111111111111",
+			"market":         "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+			"asset_id":       "12345678901234567890123456789012345678901234567890123456789012345678901234567",
 			"side":           "SELL",
 			"original_size":  "4.5454",
 			"size_matched":   "0",
@@ -36,12 +36,12 @@ func TestDecodeOrdersList(t *testing.T) {
 		t.Fatalf("want 1 order, got %d", len(got))
 	}
 	want := OpenOrder{
-		ID:           "0xc976a32babf0b64801cda48704054b1772624f76ded1c7ac88fa29ad7f1844cb",
+		ID:           "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
 		Status:       "LIVE",
-		Owner:        "77fb58cb-362f-51b3-8c8c-7e65d8583637",
-		MakerAddress: "0xc16bDe710291149EFAd2e8bDaeB7FF9fCeB22B55",
-		Market:       "0x384e2707bbb95da4bfa6f330fe7d5ccbec1c0a85e20be900cbf599987588e1a4",
-		AssetID:      "78433024518676680431174478322854148606578065650008220678402966840627347604025",
+		Owner:        "00000000-0000-0000-0000-000000000000",
+		MakerAddress: "0x1111111111111111111111111111111111111111",
+		Market:       "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+		AssetID:      "12345678901234567890123456789012345678901234567890123456789012345678901234567",
 		Side:         "SELL",
 		OriginalSize: "4.5454",
 		SizeMatched:  "0",

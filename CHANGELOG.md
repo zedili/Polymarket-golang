@@ -174,12 +174,12 @@ was archived 2026-05; this SDK now mirrors `py-clob-client-v2` semantics.
 - HMAC + V2 builder benchmarks under `polymarket/hmac_bench_test.go`,
   `polymarket/order_builder/amounts_v2_test.go`.
 - Real-world e2e validated against Polygon mainnet with a small-balance test wallet:
-  - V2 limit GTC order: `0x...` (placed + cancelled)
-  - V2 market FOK BUY: `0x...` (Reya YES 4.54 share)
-  - V2 market FOK BUY: `0x...` (BTC 5min NO 2 share)
-  - V2 market FOK SELL: `0x8f4f9d8b...` (Reya YES 4.54 share → 0.82 pUSD)
-  - Gasless `redeemPositions` on USDC.e condition: `0xa475f40a...` (2 USDC.e in)
-  - Gasless `wrap` USDC.e → pUSD: `0x0219ce7c...` (2 USDC.e → 2 pUSD)
+  - V2 limit GTC order (placed + cancelled)
+  - V2 market FOK BUY (Reya YES 4.54 share)
+  - V2 market FOK BUY (BTC 5min NO 2 share)
+  - V2 market FOK SELL (Reya YES 4.54 share → 0.82 pUSD)
+  - Gasless `redeemPositions` on USDC.e condition (2 USDC.e in)
+  - Gasless `wrap` USDC.e → pUSD (2 USDC.e → 2 pUSD)
   - WS `/ws/market` + `/ws/user` over 15s (book + price_change + trade events).
 
 ---
