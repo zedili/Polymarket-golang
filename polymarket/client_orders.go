@@ -1,7 +1,7 @@
 package polymarket
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 )
 
@@ -12,113 +12,29 @@ import (
 //   - 批量:PostOrdersV2
 // 下面保留的是与订单版本无关的 L2 操作:取消、查询、余额、通知。
 
-// Cancel 取消订单
-// 需要L2认证
+// Cancel 取消订单。需要L2认证。
+//
+// 想用 context.Context 控制 HTTP 取消,见 CancelCtx。
 func (c *ClobClient) Cancel(orderID string) (interface{}, error) {
-	if err := c.assertLevel2Auth(); err != nil {
-		return nil, err
-	}
-
-	body := map[string]string{"orderID": orderID}
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal cancel request: %w", err)
-	}
-	bodyStr := string(bodyJSON)
-
-	requestArgs := &RequestArgs{
-		Method:        "DELETE",
-		RequestPath:   Cancel,
-		Body:          body,
-		SerializedBody: &bodyStr,
-	}
-
-	headers, err := CreateLevel2Headers(c.signer, c.creds, requestArgs)
-	if err != nil {
-		return nil, err
-	}
-
-	return c.httpClient.Delete(Cancel, headers, bodyStr)
+	return c.CancelCtx(context.Background(), orderID)
 }
 
-// CancelOrders 批量取消订单
-// 需要L2认证
+// CancelOrders 批量取消订单。需要L2认证。
+// 想用 context.Context 控 HTTP 取消,见 CancelOrdersCtx。
 func (c *ClobClient) CancelOrders(orderIDs []string) (interface{}, error) {
-	if err := c.assertLevel2Auth(); err != nil {
-		return nil, err
-	}
-
-	bodyJSON, err := json.Marshal(orderIDs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal order IDs: %w", err)
-	}
-	bodyStr := string(bodyJSON)
-
-	requestArgs := &RequestArgs{
-		Method:        "DELETE",
-		RequestPath:   CancelOrders,
-		Body:          orderIDs,
-		SerializedBody: &bodyStr,
-	}
-
-	headers, err := CreateLevel2Headers(c.signer, c.creds, requestArgs)
-	if err != nil {
-		return nil, err
-	}
-
-	return c.httpClient.Delete(CancelOrders, headers, bodyStr)
+	return c.CancelOrdersCtx(context.Background(), orderIDs)
 }
 
-// CancelAll 取消所有订单
-// 需要L2认证
+// CancelAll 取消所有订单。需要L2认证。
+// 想用 context.Context 控 HTTP 取消,见 CancelAllCtx。
 func (c *ClobClient) CancelAll() (interface{}, error) {
-	if err := c.assertLevel2Auth(); err != nil {
-		return nil, err
-	}
-
-	requestArgs := &RequestArgs{
-		Method:      "DELETE",
-		RequestPath: CancelAll,
-	}
-
-	headers, err := CreateLevel2Headers(c.signer, c.creds, requestArgs)
-	if err != nil {
-		return nil, err
-	}
-
-	return c.httpClient.Delete(CancelAll, headers, nil)
+	return c.CancelAllCtx(context.Background())
 }
 
-// CancelMarketOrders 取消市场订单
-// 需要L2认证
+// CancelMarketOrders 取消某 market 上的所有订单。需要L2认证。
+// 想用 context.Context 控 HTTP 取消,见 CancelMarketOrdersCtx。
 func (c *ClobClient) CancelMarketOrders(market, assetID string) (interface{}, error) {
-	if err := c.assertLevel2Auth(); err != nil {
-		return nil, err
-	}
-
-	body := map[string]string{
-		"market":   market,
-		"asset_id": assetID,
-	}
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal cancel request: %w", err)
-	}
-	bodyStr := string(bodyJSON)
-
-	requestArgs := &RequestArgs{
-		Method:        "DELETE",
-		RequestPath:   CancelMarketOrders,
-		Body:          body,
-		SerializedBody: &bodyStr,
-	}
-
-	headers, err := CreateLevel2Headers(c.signer, c.creds, requestArgs)
-	if err != nil {
-		return nil, err
-	}
-
-	return c.httpClient.Delete(CancelMarketOrders, headers, bodyStr)
+	return c.CancelMarketOrdersCtx(context.Background(), market, assetID)
 }
 
 // GetOrders 获取订单列表
@@ -238,45 +154,14 @@ func (c *ClobClient) GetTrades(params *TradeParams, nextCursor string) ([]interf
 	return results, nil
 }
 
-// GetBalanceAllowance 获取余额和授权
-// 需要L2认证
+// GetBalanceAllowance 获取余额和授权。需要L2认证。
 //
 // 对齐 py-clob-client-v2:signature_type 参数总是从 client.sigType 取,
 // 调用方传入的 params.SignatureType 若未设置则按客户端 sigType 填。
+//
+// 想用 context.Context 控 HTTP 取消,见 GetBalanceAllowanceCtx。
 func (c *ClobClient) GetBalanceAllowance(params *BalanceAllowanceParams) (map[string]interface{}, error) {
-	if err := c.assertLevel2Auth(); err != nil {
-		return nil, err
-	}
-	if params == nil {
-		params = &BalanceAllowanceParams{}
-	}
-	if params.SignatureType == nil || *params.SignatureType < 0 {
-		sigType := c.sigType
-		params.SignatureType = &sigType
-	}
-
-	url := AddBalanceAllowanceParamsToURL(c.host+GetBalanceAllowance, params)
-	requestArgs := &RequestArgs{
-		Method:      "GET",
-		RequestPath: GetBalanceAllowance,
-	}
-
-	headers, err := CreateLevel2Headers(c.signer, c.creds, requestArgs)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Get(url[len(c.host):], headers)
-	if err != nil {
-		return nil, err
-	}
-
-	respMap, ok := resp.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid response format")
-	}
-
-	return respMap, nil
+	return c.GetBalanceAllowanceCtx(context.Background(), params)
 }
 
 // GetNotifications 获取通知

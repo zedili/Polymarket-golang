@@ -8,6 +8,7 @@ package polymarket
 //   - rewards / pre-migration orders / prices-history
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
@@ -721,94 +722,36 @@ func (c *ClobClient) CreateMarketOrderV2(args *MarketOrderArgsV2, options *Parti
 // PostOrderV2 提交一个已签名的 V2 订单。
 // 与 V1 PostOrder 的区别:这里用 V2 的 JSON payload(包含 timestamp/metadata/builder
 // 而不是 taker/nonce/feeRateBps)。需要 L2 认证。
+// PostOrderV2 提交 V2 订单。需要 L2 认证。
+//
+// 想用 context.Context 控 HTTP 取消,见 PostOrderV2Ctx。
 func (c *ClobClient) PostOrderV2(order *obuilder.SignedOrderV2, orderType OrderType, postOnly, deferExec bool) (*PostOrderResultV2, error) {
-	if order == nil {
-		return nil, fmt.Errorf("order is nil")
-	}
-	if err := c.assertLevel2Auth(); err != nil {
-		return nil, err
-	}
-	if postOnly && (orderType == OrderTypeFOK || orderType == OrderTypeFAK) {
-		return nil, fmt.Errorf("post_only orders cannot be FOK or FAK")
-	}
-	body := order.ToJSONPayload(c.creds.APIKey, string(orderType), postOnly, deferExec)
-	bodyStr, err := MarshalCompact(body)
-	if err != nil {
-		return nil, err
-	}
-	req := &RequestArgs{
-		Method:         "POST",
-		RequestPath:    PostOrder,
-		Body:           body,
-		SerializedBody: &bodyStr,
-	}
-	headers, err := CreateLevel2Headers(c.signer, c.creds, req)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.httpClient.Post(PostOrder, headers, bodyStr)
-	if err != nil {
-		return nil, err
-	}
-	// 对齐 py-clob-client-v2:服务端报版本不匹配时,刷新版本缓存,这样外层
-	// retryOnVersionUpdate 第二次会带着新版本重试。
-	if IsOrderVersionMismatch(resp) {
-		c.ResolveOrderVersion(true)
-	}
-	return &PostOrderResultV2{Payload: body, Response: resp}, nil
+	return c.PostOrderV2Ctx(context.Background(), order, orderType, postOnly, deferExec)
 }
 
 // CreateAndPostOrderV2 = CreateOrderV2 + PostOrderV2,失败时根据 /version
 // 重试一次(对应 py-clob-client-v2._retry_on_version_update)。
+//
+// 想用 context.Context 控 POST 阶段的 HTTP 取消,见 CreateAndPostOrderV2Ctx。
 func (c *ClobClient) CreateAndPostOrderV2(
 	args *OrderArgsV2,
 	options *PartialCreateOrderOptions,
 	orderType OrderType,
 	postOnly, deferExec bool,
 ) (*PostOrderResultV2, error) {
-	if orderType == "" {
-		orderType = OrderTypeGTC
-	}
-	result, err := c.retryOnVersionUpdate(func() (interface{}, error) {
-		order, err := c.CreateOrderV2(args, options)
-		if err != nil {
-			return nil, err
-		}
-		return c.PostOrderV2(order, orderType, postOnly, deferExec)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if r, ok := result.(*PostOrderResultV2); ok {
-		return r, nil
-	}
-	return nil, fmt.Errorf("unexpected result type from retry")
+	return c.CreateAndPostOrderV2Ctx(context.Background(), args, options, orderType, postOnly, deferExec)
 }
 
 // CreateAndPostMarketOrderV2 = CreateMarketOrderV2 + PostOrderV2 + retry。
+//
+// 想用 context.Context 控 POST 阶段的 HTTP 取消,见 CreateAndPostMarketOrderV2Ctx。
 func (c *ClobClient) CreateAndPostMarketOrderV2(
 	args *MarketOrderArgsV2,
 	options *PartialCreateOrderOptions,
 	orderType OrderType,
 	deferExec bool,
 ) (*PostOrderResultV2, error) {
-	if orderType == "" {
-		orderType = OrderTypeFOK
-	}
-	result, err := c.retryOnVersionUpdate(func() (interface{}, error) {
-		order, err := c.CreateMarketOrderV2(args, options)
-		if err != nil {
-			return nil, err
-		}
-		return c.PostOrderV2(order, orderType, false, deferExec)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if r, ok := result.(*PostOrderResultV2); ok {
-		return r, nil
-	}
-	return nil, fmt.Errorf("unexpected result type from retry")
+	return c.CreateAndPostMarketOrderV2Ctx(context.Background(), args, options, orderType, deferExec)
 }
 
 // PostOrdersV2 批量提交 V2 订单。需要 L2。

@@ -7,10 +7,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
-Planned for v0.4.0 (breaking):
-- `*Ctx` variants on hot-path public methods (caller-cancellable HTTP).
-- Typed responses for `GetOrders` / `GetTrades` / `Cancel*` / `GetMarket` / `GetBalanceAllowance`
-  (returning typed structs instead of `interface{}`). Original signatures kept as deprecated.
+(Nothing planned.)
+
+---
+
+## [0.4.0] — 2026-05-20
+
+Adds `context.Context` and typed responses on hot-path methods. **Not breaking** —
+all existing method signatures preserved; new variants live alongside.
+
+### Added — `*Ctx` variants
+
+Caller-cancellable HTTP for the most-used public methods. Original methods
+delegate via `context.Background()`.
+
+- `CancelCtx`, `CancelOrdersCtx`, `CancelAllCtx`, `CancelMarketOrdersCtx`
+- `PostOrderV2Ctx`, `CreateAndPostOrderV2Ctx`, `CreateAndPostMarketOrderV2Ctx`
+- `GetBalanceAllowanceCtx`
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+result, err := client.CreateAndPostOrderV2Ctx(ctx, args, nil, polymarket.OrderTypeGTC, false, false)
+```
+
+### Added — Typed responses
+
+Strongly-typed structs (`OpenOrder`, `Trade`, `MakerOrderRef`, `CancelResult`) +
+`*Typed` method variants that decode the existing `interface{}` returns. Save your
+callers from manual `map[string]interface{}` gymnastics.
+
+- `GetOrdersTyped` / `GetOrdersTypedCtx` → `[]OpenOrder`
+- `GetTradesTyped` / `GetTradesTypedCtx` → `[]Trade`
+- `GetOrderTyped` → `*OpenOrder`
+- `CancelTyped` / `CancelOrdersTyped` / `CancelAllTyped` → `*CancelResult`
+
+```go
+orders, _ := client.GetOrdersTyped(nil, "")
+for _, o := range orders {
+    fmt.Printf("%s %s @ %s\n", o.Side, o.OriginalSize, o.Price) // IDE autocomplete!
+}
+```
+
+Implementation note: `*Typed` methods walk the original `interface{}` path then
+JSON-roundtrip into the typed struct (~10 µs overhead). Original `interface{}` API
+remains for callers who decode manually or have unusual response shapes.
 
 ---
 
