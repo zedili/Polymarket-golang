@@ -8,14 +8,99 @@ Follow at X:  @netu5er
 
 ## Features
 
-- ✅ **V1 + V2 parity** with the official Python clients
+- ✅ **V2-native** — aligned with `py-clob-client-v2` (V1 was archived 2026-05)
 - ✅ **CTF Exchange V2** order signing (EIP-712 EOA + EIP-1271 Solady wrapped for Deposit Wallet)
 - ✅ **Automatic version negotiation** — `/version` cache + retry on `order_version_mismatch`
 - ✅ **Builder code / Builder API key** for fee attribution
 - ✅ **Three Authentication Levels**: L0, L1, L2 (with HMAC body signing aligned to V2)
 - ✅ **Order Management**: limit + market, post-only, GTC/GTD/FOK/FAK, batch
 - ✅ **RFQ**: request-for-quote flow
+- ✅ **WebSocket** — `/ws/market` + `/ws/user` with typed dispatcher, read deadline, reconnect-aware sentinels
+- ✅ **Bridge** — cross-chain deposit/withdraw via `bridge.polymarket.com`
+- ✅ **Rewards / Rebates** — full earnings + market reward configs
+- ✅ **Gasless on-chain ops** — split / merge / redeem / convert / wrap USDC.e→pUSD
 - ✅ **Strong typing** + byte-for-byte tested against py-clob-client-v2 golden signatures
+
+## What's new in v0.3.0
+
+Full V2 migration plus four new module groups. Quick taste of each — see
+[CHANGELOG.md](CHANGELOG.md) for the full list.
+
+### WebSocket (real-time book + user events)
+
+```go
+// market channel (no auth)
+mc, _ := polymarket.NewMarketWSClient(
+    []string{tokenID}, true, // custom_feature_enabled=true also delivers new_market events
+    &polymarket.WSHandler{
+        OnBook:        func(e polymarket.WSBookEvent)        { /* full snapshot */ },
+        OnPriceChange: func(e polymarket.WSPriceChangeEvent) { /* deltas */ },
+        OnLastTradePrice: func(e polymarket.WSLastTradePriceEvent) { /* trades */ },
+    },
+)
+go mc.Run(ctx) // blocks until ctx done / ErrWSServerClose / ErrWSReadTimeout
+
+// user channel (L2 auth — must use EOA-derived key, NOT builder key)
+uc, _ := polymarket.NewUserWSClient(derivedCreds, []string{conditionID}, &polymarket.WSHandler{
+    OnOrder: func(e polymarket.WSOrderEvent) { /* PLACEMENT/UPDATE/CANCELLATION */ },
+    OnTrade: func(e polymarket.WSTradeEvent) { /* MATCHED/MINED/CONFIRMED */ },
+})
+go uc.Run(ctx)
+```
+
+Read deadline (3.5× ping) auto-resets on every frame — no more silent freeze on
+half-open TCP. Decoder errors surface via `HandleUnknown("<event_type>:decode_error", raw)`
+so schema drift doesn't lose user events.
+
+### Wrap USDC.e → pUSD (CollateralOnramp)
+
+After redeeming a V1 USDC.e condition, your proxy wallet holds USDC.e. Polymarket
+UI shows it as "Pending deposit" — the SDK can wrap it gaslessly in one batch:
+
+```go
+wc, _ := web3.NewPolymarketGaslessWeb3Client(pk, web3.SignatureTypePolyProxy,
+    builderCreds, 137, rpcURL)
+
+// approve(USDC.e → Onramp) + Onramp.wrap(USDC.e, recipient, amount) in one relay tx
+receipt, _ := wc.WrapUSDCeToPUSD(2.0, common.HexToAddress(funder))
+```
+
+### Bridge (cross-chain deposits)
+
+```go
+b := polymarket.NewBridgeClient() // independent host: bridge.polymarket.com
+
+assets, _ := b.GetSupportedAssets()       // 209 tokens across many chains
+dep, _    := b.CreateDepositAddresses(walletAddress) // returns EVM/SVM/BTC addresses
+quote, _  := b.GetQuote(&polymarket.BridgeQuoteRequest{...})
+status, _ := b.GetStatus(dep.Address.EVM) // poll progress
+```
+
+### Rewards / Rebates
+
+```go
+// public — current reward configs
+all, _ := client.GetRewardsMarketsCurrent(nil, "")
+
+// L2 — my earnings today
+earnings, _ := client.GetTotalEarningsForUserForDay(&polymarket.RewardsUserQuery{
+    Date: "2026-05-19", MakerAddress: funder,
+})
+```
+
+### Data API + Gamma API
+
+```go
+da := polymarket.NewDataAPIClient()
+redeemable := true
+positions, _ := da.GetPositions(&polymarket.PositionsQuery{
+    User: walletAddress, Redeemable: &redeemable,
+})
+
+ga := polymarket.NewGammaAPIClient()
+active, limit := true, 50
+markets, _ := ga.ListMarkets(&polymarket.GammaMarketsQuery{Active: &active, Limit: &limit})
+```
 
 ## V2 quick start
 

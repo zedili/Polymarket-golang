@@ -8,14 +8,97 @@ Follow at X:  @netu5er
 
 ## 特性
 
-- ✅ **V1 + V2 双版本** —— 与官方 Python 客户端完全对齐
+- ✅ **V2-native** —— 对齐 `py-clob-client-v2`(V1 已于 2026-05 归档)
 - ✅ **CTF Exchange V2** 订单签名(EIP-712 EOA + EIP-1271 Solady 包装,支持 Deposit Wallet)
 - ✅ **自动版本协商** —— `/version` 缓存 + 遇到 `order_version_mismatch` 时自动重试
 - ✅ **Builder code / Builder API key** —— 第三方接入返佣
 - ✅ **三种认证级别**:L0、L1、L2(L2 HMAC 已对齐 V2 的预序列化 body 规范)
 - ✅ **完整订单管理**:限价/市价、PostOnly、GTC/GTD/FOK/FAK、批量
 - ✅ **RFQ**:报价请求流程
+- ✅ **WebSocket** —— `/ws/market` + `/ws/user`,强类型 dispatcher、读超时、可重连 sentinel
+- ✅ **Bridge** —— 跨链入金(`bridge.polymarket.com`)
+- ✅ **Rewards / Rebates** —— maker 收益 / market reward 配置全套
+- ✅ **链上 gasless** —— split / merge / redeem / convert / wrap USDC.e→pUSD
 - ✅ **强类型** + 以 py-clob-client-v2 的 golden signature 做了 byte-for-byte 测试
+
+## v0.3.0 新功能
+
+完整 V2 迁移 + 四组新模块。下面是简单用法,完整变更看 [CHANGELOG.md](CHANGELOG.md)。
+
+### WebSocket(实时盘口 + 用户事件)
+
+```go
+// market 频道(无需认证)
+mc, _ := polymarket.NewMarketWSClient(
+    []string{tokenID}, true, // custom_feature_enabled=true 同时推 new_market 事件
+    &polymarket.WSHandler{
+        OnBook:           func(e polymarket.WSBookEvent)         { /* 完整快照 */ },
+        OnPriceChange:    func(e polymarket.WSPriceChangeEvent)  { /* 价位 delta */ },
+        OnLastTradePrice: func(e polymarket.WSLastTradePriceEvent){ /* 成交 */ },
+    },
+)
+go mc.Run(ctx) // 阻塞,ctx 取消 / ErrWSServerClose / ErrWSReadTimeout 才返回
+
+// user 频道(L2 认证 —— 必须用 EOA 派生 key,Builder key 会被服务端立刻 close)
+uc, _ := polymarket.NewUserWSClient(derivedCreds, []string{conditionID}, &polymarket.WSHandler{
+    OnOrder: func(e polymarket.WSOrderEvent) { /* PLACEMENT/UPDATE/CANCELLATION */ },
+    OnTrade: func(e polymarket.WSTradeEvent) { /* MATCHED/MINED/CONFIRMED */ },
+})
+go uc.Run(ctx)
+```
+
+读超时(3.5×ping)每帧自动重置,半开 TCP 不再静默冻死;decoder 错误走
+`HandleUnknown("<event_type>:decode_error", raw)`,服务端 schema 漂移不会丢用户事件。
+
+### USDC.e → pUSD wrap(CollateralOnramp)
+
+V1 USDC.e condition redeem 之后,proxy 钱包里多出来的 USDC.e 在 Polymarket UI 上显示
+"Pending deposit",SDK 一次 batch 就能 gasless 转成 pUSD:
+
+```go
+wc, _ := web3.NewPolymarketGaslessWeb3Client(pk, web3.SignatureTypePolyProxy,
+    builderCreds, 137, rpcURL)
+
+// approve(USDC.e → Onramp) + Onramp.wrap(USDC.e, recipient, amount) 一次中继
+receipt, _ := wc.WrapUSDCeToPUSD(2.0, common.HexToAddress(funder))
+```
+
+### Bridge(跨链入金)
+
+```go
+b := polymarket.NewBridgeClient() // 独立 host:bridge.polymarket.com
+
+assets, _ := b.GetSupportedAssets()                  // 209 个跨链 token
+dep, _    := b.CreateDepositAddresses(walletAddress) // 返回 EVM/SVM/BTC 地址
+quote, _  := b.GetQuote(&polymarket.BridgeQuoteRequest{...})
+status, _ := b.GetStatus(dep.Address.EVM)            // 轮询进度
+```
+
+### Rewards / Rebates
+
+```go
+// 公开 —— 当前 reward 配置
+all, _ := client.GetRewardsMarketsCurrent(nil, "")
+
+// L2 —— 今天我的收益
+earnings, _ := client.GetTotalEarningsForUserForDay(&polymarket.RewardsUserQuery{
+    Date: "2026-05-19", MakerAddress: funder,
+})
+```
+
+### Data API + Gamma API
+
+```go
+da := polymarket.NewDataAPIClient()
+redeemable := true
+positions, _ := da.GetPositions(&polymarket.PositionsQuery{
+    User: walletAddress, Redeemable: &redeemable,
+})
+
+ga := polymarket.NewGammaAPIClient()
+active, limit := true, 50
+markets, _ := ga.ListMarkets(&polymarket.GammaMarketsQuery{Active: &active, Limit: &limit})
+```
 
 ## V2 快速开始
 

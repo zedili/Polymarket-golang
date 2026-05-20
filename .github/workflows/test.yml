@@ -1,0 +1,63 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 全局并发控制:同一 PR / branch 新 push 自动取消旧 run,省 CI 时间
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # go.mod 的 `go 1.24.0` directive + `toolchain go1.24.9` 要求 1.24+。
+        # 想兼容老 Go,把 go.mod 的 `go 1.24.0` 降到 `go 1.22` 即可,但要确认
+        # 没用 1.24-only 特性(range over int / for range func 等)。
+        go: ["1.24.x"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+          cache: true
+
+      - name: go mod download
+        run: go mod download
+
+      - name: Verify mod tidy
+        # 防止有人忘记 go mod tidy 把 go.sum 弄脏
+        run: |
+          go mod tidy
+          if [ -n "$(git status --porcelain go.mod go.sum)" ]; then
+            echo "::error::go.mod or go.sum out of date — run 'go mod tidy'"
+            git diff go.mod go.sum
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test -count=1 ./...
+
+      - name: go test -race
+        run: go test -count=1 -race -timeout 5m ./...
