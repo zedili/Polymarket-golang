@@ -8,17 +8,21 @@
 # Test binary
 *.test
 
-# Compiled binaries (Go) —— go run/build 在项目根产生的可执行文件没有扩展名
-check_positions
-ethcall_probe
-place_order
-btc_5min_test
-gasless_batch_redeem
-wrap_usdce
-sell_position
-ws_demo
-v2_full_test
-test_*
+# Compiled binaries (Go) —— go run/build 在项目根产生的可执行文件没有扩展名。
+#
+# 重要:每条都用 / 前缀根锚定,否则 `gasless_batch_redeem` 这种没扩展名的
+# 模式会匹配 *任意目录里* 同名条目 —— 包括 examples/gasless_batch_redeem/
+# 这个目录本身,导致目录里新加的 .go 文件被 git 隐形 ignore。
+/check_positions
+/ethcall_probe
+/place_order
+/btc_5min_test
+/gasless_batch_redeem
+/wrap_usdce
+/sell_position
+/ws_demo
+/v2_full_test
+/test_*
 
 # === 敏感信息防护 ===
 .env

@@ -672,17 +672,24 @@ func (c *ClobClient) CreateMarketOrderV2(args *MarketOrderArgsV2, options *Parti
 		return nil, fmt.Errorf("unsupported tick size: %s", tickSize)
 	}
 
+	// 关键:V2 市价单的 price 内部一律 RoundDown(见 GetMarketOrderAmountsV2)。
+	// fee 估算 / 余额调整必须用 *同一个* rounded price,否则:
+	//   - 估算用 0.555,实际签单按 0.55 → 实际 taker 数量 = amount/0.55(更多 share)
+	//   - 实际 platformFee > 估算 → 用户余额刚够时,签出超过保护意图的订单
+	// 一句话:先 round,后处处都用 rounded 值。
+	roundedPrice := obuilder.RoundDown(price, roundConfig.Price)
+
 	// V2 BUY 市价单且调用方提供 user_usdc_balance 时,SDK 自动调整 amount。
 	amount := args.Amount
 	if (args.Side == BUY || args.Side == "BUY") && args.UserUsdcBalance > 0 {
-		adjusted, err := c.adjustBuyAmountForBalance(tokenID, amount, price, args.UserUsdcBalance, builderCode)
+		adjusted, err := c.adjustBuyAmountForBalance(tokenID, amount, roundedPrice, args.UserUsdcBalance, builderCode)
 		if err != nil {
 			return nil, err
 		}
 		amount = adjusted
 	}
 
-	side, makerAmt, takerAmt, err := obuilder.GetMarketOrderAmountsV2(args.Side, amount, price, roundConfig)
+	side, makerAmt, takerAmt, err := obuilder.GetMarketOrderAmountsV2(args.Side, amount, roundedPrice, roundConfig)
 	if err != nil {
 		return nil, err
 	}

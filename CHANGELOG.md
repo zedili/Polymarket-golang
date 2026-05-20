@@ -11,6 +11,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ---
 
+## [0.4.1] — 2026-05-20
+
+Two bug fixes found in post-release audit.
+
+### Fixed
+
+- **[P2] V2 market BUY balance protection used un-rounded price for fee estimation.**
+  `CreateMarketOrderV2` line 678 called `adjustBuyAmountForBalance(amount, price, ...)`
+  with the raw price, but the actual order construction (`GetMarketOrderAmountsV2` →
+  line 433 `RoundDown(price, tick)`) used a rounded price. Example: tick=0.01,
+  price=0.555 → fee estimated as if price=0.555 (lower fee), but order signed with
+  price=0.55 (higher actual fee on more shares per dollar). When balance was
+  borderline, the SDK could sign an order that exceeded the user's balance
+  protection intent. Fix: round the price down to tick **before** passing into
+  `adjustBuyAmountForBalance`, then use the same rounded value for both fee
+  estimation and order construction.
+  - Regression test `TestCreateMarketOrderV2RoundsPriceBeforeBalanceAdjust`
+    verifies the consistency: passes with fix, fails without.
+- **[P3] `.gitignore` binary patterns weren't root-anchored.** Rules like
+  `gasless_batch_redeem` (no leading `/`) matched any path, so files newly added
+  under `examples/gasless_batch_redeem/` (e.g. `new_file.go`) were silently ignored
+  by git and never staged. Fix: prefix all root-binary rules with `/` to scope them
+  to the project root only.
+
+### Note
+
+These are non-breaking — same call signatures, just correct behavior. The P2 fix
+only changes behavior when user provides `UserUsdcBalance` AND price doesn't fit
+tick AND balance is near the cost line, which is an edge case but a real one.
+
+---
+
 ## [0.4.0] — 2026-05-20
 
 Adds `context.Context` and typed responses on hot-path methods. **Not breaking** —

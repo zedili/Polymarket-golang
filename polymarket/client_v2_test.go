@@ -942,6 +942,55 @@ func TestCreateOrderV2WithUserUsdcBalance(t *testing.T) {
 	}
 }
 
+// TestCreateMarketOrderV2RoundsPriceBeforeBalanceAdjust 是 P2 回归测试。
+//
+// V2 市价单内部 GetMarketOrderAmountsV2 一定会 RoundDown(price, tick),所以
+// adjustBuyAmountForBalance(估算 fee 时)必须先用同一个 rounded price。
+//
+// 修之前的 bug 情景(tick=0.01, price=0.555, fee r=0.02 e=1):
+//   - 估算用 price=0.555:
+//       platformFeeRate = 0.02 * (0.555*0.445)^1 = 0.0049395
+//       platformFee     = (100/0.555) * 0.0049395 ≈ 0.8900
+//       totalCost       = 100 + 0.8900 = 100.8900
+//   - 签单实际用 price=0.55:
+//       platformFee_actual = (100/0.55) * 0.02 * (0.55*0.45)^1
+//                          = (100/0.55) * 0.00495 ≈ 0.9000
+//
+// 如果 balance = 100.895:
+//   - bug: 估算 totalCost(100.89) ≤ balance(100.895) → 返回 amount=100 不缩,
+//     但实际签单要花 100.90 > balance → 签出超过保护意图的订单(在链上会失败)
+//   - 修后:估算用 0.55,totalCost(100.90) > balance(100.895) → 返回
+//     balance - platformFee = 100.895 - 0.9 = 99.995 USDC,缩到 99_995_000
+//
+// 关键断言:bug 状态下 maker=100_000_000;修好后 maker=99_995_000。
+func TestCreateMarketOrderV2RoundsPriceBeforeBalanceAdjust(t *testing.T) {
+	c, _ := newMockClient(t, &mockHandler{tickSize: "0.01"})
+	c.SetCachedOrderVersion(2)
+	order, err := c.CreateMarketOrderV2(&MarketOrderArgsV2{
+		TokenID:         "12345",
+		Amount:          100, // BUY 市价:amount = USDC
+		Side:            BUY,
+		Price:           0.555,   // 必须被 RoundDown 到 0.55
+		OrderType:       OrderTypeFOK,
+		UserUsdcBalance: 100.895, // borderline:刚好暴露 round 不一致 bug
+	}, nil)
+	if err != nil {
+		t.Fatalf("create market v2: %v", err)
+	}
+	// bug: makerAmount=100_000_000(超过 balance,链上会 revert)
+	// fix: makerAmount=99_995_000 (= 100.895 - 0.9, 缩到 balance 内)
+	got := order.MakerAmount.Int64()
+	if got >= 100_000_000 {
+		t.Errorf("makerAmount=%d — P2 bug: fee estimated with un-rounded price 0.555, "+
+			"actual fee uses 0.55, balance protection didn't kick in. "+
+			"Expected adjusted maker (< 100_000_000)", got)
+	}
+	// 允许 ±50k dust 误差 —— core check 是 < 100M(即真的被 adjust 了)
+	if got < 99_900_000 || got > 100_000_000 {
+		t.Errorf("makerAmount=%d, want ~99_995_000 (balance - actual platformFee)", got)
+	}
+}
+
 // TestCreateOrderV2PolyProxyMakerIsFunderSignerIsEOA
 // PolyProxy (Magic/Email) 路径下,经 Polymarket 网页真实 POST /order 抓包验证:
 //   - maker  = Deposit Wallet (funder)
