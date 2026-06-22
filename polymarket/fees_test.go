@@ -9,13 +9,14 @@ import (
 // 复现脚本:python3 /tmp/gen_market_and_fees_goldens.py
 //
 // 公式:platform_fee = (amount/price) * fee_rate * (price*(1-price))^exp * (1 + slippage/100)
-//      builder_fee = min(amount, balance) * builder_taker_fee
-//      total = amount + platform_fee + builder_fee
-//      若 balance <= total: 返回 balance - platform_fee - builder_fee(>=0)
-//      否则返回 amount。
+//
+//	builder_fee = min(amount, balance) * builder_taker_fee
+//	total = amount + platform_fee + builder_fee
+//	若 balance <= total: 返回 balance - platform_fee - builder_fee(>=0)
+//	否则返回 amount。
 func TestAdjustBuyAmountForFees_MatchesPython(t *testing.T) {
 	cases := []struct {
-		name                                                                      string
+		name                                                                     string
 		amount, price, balance, feeRate, feeExp, builderTakerFee, slippage, want float64
 	}{
 		{"balance_enough", 100, 0.5, 500, 0.02, 1, 0.01, 0, 100},
@@ -55,7 +56,7 @@ func TestValidateFeeSlippage(t *testing.T) {
 
 func TestClobClientSetFeeSlippage(t *testing.T) {
 	creds := &ApiCreds{APIKey: "k", APISecret: testSecret, APIPassphrase: "p"}
-	c, err := NewClobClient("http://127.0.0.1:1", 137, "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", creds, nil, "")
+	c, err := NewClobClient("http://127.0.0.1:1", 137, "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "", creds, nil, "")
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}

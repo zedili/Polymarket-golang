@@ -100,7 +100,7 @@ func newMockClient(t *testing.T, h *mockHandler) (*ClobClient, *httptest.Server)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	creds := &ApiCreds{APIKey: "k", APISecret: testSecret, APIPassphrase: "p"}
-	client, err := NewClobClient(srv.URL, 137, v2TestPK, creds, nil, "")
+	client, err := NewClobClient(srv.URL, 137, v2TestPK, "", creds, nil, "")
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestGetVersionReturnsServerVersion(t *testing.T) {
 func TestGetVersionDefaultsToV2OnFailure(t *testing.T) {
 	// 不挂任何 handler,直接连一个已关闭的 server。
 	creds := &ApiCreds{APIKey: "k", APISecret: testSecret, APIPassphrase: "p"}
-	client, err := NewClobClient("http://127.0.0.1:1", 137, v2TestPK, creds, nil, "")
+	client, err := NewClobClient("http://127.0.0.1:1", 137, v2TestPK, "", creds, nil, "")
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -613,7 +613,7 @@ func TestCreateBuilderAPIKeyCredsNoBody(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	creds := &ApiCreds{APIKey: "k", APISecret: testSecret, APIPassphrase: "p"}
-	c, _ := NewClobClient(srv.URL, 137, v2TestPK, creds, nil, "")
+	c, _ := NewClobClient(srv.URL, 137, v2TestPK, "", creds, nil, "")
 	raw, err := c.CreateBuilderAPIKeyCreds()
 	if err != nil {
 		t.Fatalf("create builder key: %v", err)
@@ -643,7 +643,7 @@ func TestCreateBuilderAPIKeyTypedWrapper(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	creds := &ApiCreds{APIKey: "k", APISecret: testSecret, APIPassphrase: "p"}
-	c, _ := NewClobClient(srv.URL, 137, v2TestPK, creds, nil, "")
+	c, _ := NewClobClient(srv.URL, 137, v2TestPK, "", creds, nil, "")
 
 	got, err := c.CreateBuilderAPIKey()
 	if err != nil {
@@ -747,7 +747,7 @@ func TestGetBuilderTradesNoAuth(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	creds := &ApiCreds{APIKey: "k", APISecret: testSecret, APIPassphrase: "p"}
-	c, _ := NewClobClient(srv.URL, 137, v2TestPK, creds, nil, "")
+	c, _ := NewClobClient(srv.URL, 137, v2TestPK, "", creds, nil, "")
 	bc := "0xabc0000000000000000000000000000000000000000000000000000000000001"
 	_, err := c.GetBuilderTrades(&BuilderTradeParams{BuilderCode: bc}, "")
 	if err != nil {
@@ -777,7 +777,7 @@ func TestGetBuilderTradesEncodesSpecialChars(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	creds := &ApiCreds{APIKey: "k", APISecret: testSecret, APIPassphrase: "p"}
-	c, _ := NewClobClient(srv.URL, 137, v2TestPK, creds, nil, "")
+	c, _ := NewClobClient(srv.URL, 137, v2TestPK, "", creds, nil, "")
 
 	weird := "a&b=c d#e"
 	_, err := c.GetBuilderTrades(&BuilderTradeParams{
@@ -854,7 +854,7 @@ func TestGetClobMarketInfoErrorsOnEmptyTokens(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	creds := &ApiCreds{APIKey: "k", APISecret: testSecret, APIPassphrase: "p"}
-	c, _ := NewClobClient(srv.URL, 137, v2TestPK, creds, nil, "")
+	c, _ := NewClobClient(srv.URL, 137, v2TestPK, "", creds, nil, "")
 	if _, err := c.GetClobMarketInfo("cond-X"); err == nil {
 		t.Error("expected error when tokens missing")
 	}
@@ -876,7 +876,7 @@ func TestAdjustBuyAmountForBalanceErrorsWithoutFeeInfo(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	creds := &ApiCreds{APIKey: "k", APISecret: testSecret, APIPassphrase: "p"}
-	c, _ := NewClobClient(srv.URL, 137, v2TestPK, creds, nil, "")
+	c, _ := NewClobClient(srv.URL, 137, v2TestPK, "", creds, nil, "")
 
 	_, err := c.adjustBuyAmountForBalance("token-X", 100, 0.5, 50, "")
 	if err == nil {
@@ -889,7 +889,8 @@ func TestAdjustBuyAmountForBalanceErrorsWithoutFeeInfo(t *testing.T) {
 // 而不是 fee 按 0.555 估算、签订单按 0.56。
 //
 // 期望:size=100, price=0.555(被 round 到 0.56), balance=1000(够花)→
-//   makerAmount = 100 * 0.56 = 56 USDC = 56_000_000
+//
+//	makerAmount = 100 * 0.56 = 56 USDC = 56_000_000
 func TestCreateOrderV2RoundsPriceBeforeFeeAdjust(t *testing.T) {
 	c, _ := newMockClient(t, &mockHandler{tickSize: "0.01"})
 	c.SetCachedOrderVersion(2)
@@ -914,9 +915,11 @@ func TestCreateOrderV2RoundsPriceBeforeFeeAdjust(t *testing.T) {
 // SDK 自动按市场费率公式缩小 size,与 Python _adjust_buy_amount_for_balance 一致。
 //
 // 设定:
-//   amount = 100 * 0.5 = 50 USDC,price=0.5
-//   balance = 10 USDC (远不够)
-//   fee_rate = 0.02, exp = 1, no builder code, slippage = 0
+//
+//	amount = 100 * 0.5 = 50 USDC,price=0.5
+//	balance = 10 USDC (远不够)
+//	fee_rate = 0.02, exp = 1, no builder code, slippage = 0
+//
 // 公式 platform_fee_rate = 0.02 * (0.5 * 0.5)^1 = 0.005
 // 平台费 = (min(50, 10) / 0.5) * 0.005 = 0.1
 // 总成本 = 50 + 0.1 = 50.1 > 10,所以 adjusted = 10 - 0.1 = 9.9 USDC
@@ -949,12 +952,12 @@ func TestCreateOrderV2WithUserUsdcBalance(t *testing.T) {
 //
 // 修之前的 bug 情景(tick=0.01, price=0.555, fee r=0.02 e=1):
 //   - 估算用 price=0.555:
-//       platformFeeRate = 0.02 * (0.555*0.445)^1 = 0.0049395
-//       platformFee     = (100/0.555) * 0.0049395 ≈ 0.8900
-//       totalCost       = 100 + 0.8900 = 100.8900
+//     platformFeeRate = 0.02 * (0.555*0.445)^1 = 0.0049395
+//     platformFee     = (100/0.555) * 0.0049395 ≈ 0.8900
+//     totalCost       = 100 + 0.8900 = 100.8900
 //   - 签单实际用 price=0.55:
-//       platformFee_actual = (100/0.55) * 0.02 * (0.55*0.45)^1
-//                          = (100/0.55) * 0.00495 ≈ 0.9000
+//     platformFee_actual = (100/0.55) * 0.02 * (0.55*0.45)^1
+//     = (100/0.55) * 0.00495 ≈ 0.9000
 //
 // 如果 balance = 100.895:
 //   - bug: 估算 totalCost(100.89) ≤ balance(100.895) → 返回 amount=100 不缩,
@@ -970,7 +973,7 @@ func TestCreateMarketOrderV2RoundsPriceBeforeBalanceAdjust(t *testing.T) {
 		TokenID:         "12345",
 		Amount:          100, // BUY 市价:amount = USDC
 		Side:            BUY,
-		Price:           0.555,   // 必须被 RoundDown 到 0.55
+		Price:           0.555, // 必须被 RoundDown 到 0.55
 		OrderType:       OrderTypeFOK,
 		UserUsdcBalance: 100.895, // borderline:刚好暴露 round 不一致 bug
 	}, nil)
@@ -1003,7 +1006,7 @@ func TestCreateOrderV2PolyProxyMakerIsFunderSignerIsEOA(t *testing.T) {
 	h := &mockHandler{}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	c, _ := NewClobClient(srv.URL, 137, v2TestPK, creds, &sig, funder)
+	c, _ := NewClobClient(srv.URL, 137, v2TestPK, "", creds, &sig, funder)
 	c.SetCachedOrderVersion(2)
 
 	order, err := c.CreateOrderV2(&OrderArgsV2{
@@ -1034,7 +1037,7 @@ func TestCreateOrderV2Poly1271MakerAndSignerAreFunder(t *testing.T) {
 	h := &mockHandler{}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	c, err := NewClobClient(srv.URL, 137, v2TestPK, creds, &sig, depositWallet)
+	c, err := NewClobClient(srv.URL, 137, v2TestPK, "", creds, &sig, depositWallet)
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}

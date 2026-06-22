@@ -2,15 +2,16 @@
 //
 // Deposit Wallet 是 Polymarket V2 推出的智能合约钱包,链上验证签名走
 // EIP-1271 + Solady TypedDataSign。要求:
-//   1. EOA 已部署 Deposit Wallet 合约(链上动作,本示例不包含)
-//   2. Deposit Wallet 已充值 USDC 并完成 CTF / Exchange approval
-//   3. EOA 仍然持有签名权(本程序用 PRIVATE_KEY 签,signer 字段会指向 Deposit Wallet)
+//  1. EOA 已部署 Deposit Wallet 合约(链上动作,本示例不包含)
+//  2. Deposit Wallet 已充值 USDC 并完成 CTF / Exchange approval
+//  3. EOA 仍然持有签名权(本程序用 PRIVATE_KEY 签,signer 字段会指向 Deposit Wallet)
 //
 // 环境变量:
-//   PRIVATE_KEY      EOA 私钥
-//   DEPOSIT_WALLET   Deposit Wallet 合约地址(=funder)
-//   TOKEN_ID         条件代币 ID
-//   PRICE / SIZE     价/量
+//
+//	PRIVATE_KEY      EOA 私钥
+//	DEPOSIT_WALLET   Deposit Wallet 合约地址(=funder)
+//	TOKEN_ID         条件代币 ID
+//	PRICE / SIZE     价/量
 package main
 
 import (
@@ -35,7 +36,7 @@ func main() {
 
 	// signatureType=3 表示 POLY_1271, funder = deposit wallet 合约地址
 	sigType := polymarket.SigTypePoly1271
-	client, err := polymarket.NewClobClient(host, chainID, pk, nil, &sigType, deposit)
+	client, err := polymarket.NewClobClient(host, chainID, pk, "", nil, &sigType, deposit)
 	if err != nil {
 		log.Fatalf("new client: %v", err)
 	}

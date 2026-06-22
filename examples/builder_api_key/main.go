@@ -1,15 +1,16 @@
 // builder_api_key 演示创建 / 查询 / 撤销 V2 builder API key 和拉取 builder 费率。
 //
 // V2 引入 builder code (bytes32) 用于第三方接入方做返佣。流程:
-//   1. 用 L2 API key 调用 POST /auth/builder-api-key 注册一个 builder API key
-//   2. 后续创建订单时把 builder code 填进 OrderArgsV2.BuilderCode 或
-//      ClobClient.SetBuilderConfig()
-//   3. 也可以查 /fees/builder-fees/{code} 看 maker/taker 费率
+//  1. 用 L2 API key 调用 POST /auth/builder-api-key 注册一个 builder API key
+//  2. 后续创建订单时把 builder code 填进 OrderArgsV2.BuilderCode 或
+//     ClobClient.SetBuilderConfig()
+//  3. 也可以查 /fees/builder-fees/{code} 看 maker/taker 费率
 //
 // 环境变量:
-//   PRIVATE_KEY, CLOB_API_KEY/CLOB_SECRET/CLOB_PASSPHRASE — 已有 L2 凭证
-//   BUILDER_CODE — bytes32 builder code(0x… 64 个 hex 字符)
-//   ACTION — create | list | revoke | rate(默认 list)
+//
+//	PRIVATE_KEY, CLOB_API_KEY/CLOB_SECRET/CLOB_PASSPHRASE — 已有 L2 凭证
+//	BUILDER_CODE — bytes32 builder code(0x… 64 个 hex 字符)
+//	ACTION — create | list | revoke | rate(默认 list)
 package main
 
 import (
@@ -29,7 +30,7 @@ func main() {
 		APIPassphrase: requireEnv("CLOB_PASSPHRASE"),
 	}
 	host := orDefault("CLOB_HOST", "https://clob.polymarket.com")
-	client, err := polymarket.NewClobClient(host, 137, pk, creds, nil, "")
+	client, err := polymarket.NewClobClient(host, 137, pk, "", creds, nil, "")
 	if err != nil {
 		log.Fatalf("new client: %v", err)
 	}

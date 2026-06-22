@@ -42,6 +42,7 @@ func main() {
 		host,
 		chainID,
 		privateKey,
+		"",
 		nil,        // 初始时没有API凭证
 		sigTypePtr, // 签名类型（0=EOA, 1=Magic/Email, 2=Browser proxy）
 		funder,

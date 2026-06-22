@@ -99,6 +99,7 @@ func (c *ClobClient) GetFeeSlippage() float64 {
 // SetRetryConfig 设置 HTTP 客户端的重试策略。默认策略:
 //   - GET 上 429/5xx/net err 最多重试 3 次,指数退避 200ms → 3s
 //   - POST/PUT/DELETE 不重试(防 PostOrder 重复下单)
+//
 // 把 cfg.RetryNonIdempotent 设为 true 才会重试 POST。
 func (c *ClobClient) SetRetryConfig(cfg RetryConfig) {
 	c.httpClient.SetRetryConfig(cfg)
@@ -396,6 +397,86 @@ func (c *ClobClient) CreateBuilderAPIKey() (*BuilderApiKey, error) {
 		return nil, err
 	}
 	return ParseBuilderApiKey(raw)
+}
+
+// 前端签名 eip712 并且组装好 headers ，发给后端生成 api key
+func (c *ClobClient) CreateAPIKeyWithHeaders(headers map[string]string) (*ApiCreds, error) {
+
+	resp, err := c.httpClient.Post(CreateAPIKey, headers, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	respMap, ok := resp.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid response format")
+	}
+
+	creds := &ApiCreds{
+		APIKey:        getStringFromMap(respMap, "apiKey"),
+		APISecret:     getStringFromMap(respMap, "secret"),
+		APIPassphrase: getStringFromMap(respMap, "passphrase"),
+	}
+
+	// 自动设置到客户端
+	c.SetAPICreds(creds)
+	return creds, nil
+}
+
+func (c *ClobClient) CreateBuilderAPIKeyWithAddress() (*BuilderApiKey, error) {
+	raw, err := c.CreateBuilderAPIKeyCredsWithAddress()
+	if err != nil {
+		return nil, err
+	}
+	return ParseBuilderApiKey(raw)
+}
+
+func (c *ClobClient) CreateBuilderAPIKeyCredsWithAddress() (interface{}, error) {
+	//if err := c.assertLevel2Auth(); err != nil {
+	//	return nil, err
+	//}
+	req := &RequestArgs{Method: "POST", RequestPath: CreateBuilderAPIKey}
+	headers, err := CreateLevel2HeadersWithAddress(c.address, c.creds, req)
+	if err != nil {
+		return nil, err
+	}
+	return c.httpClient.Post(CreateBuilderAPIKey, headers, nil)
+}
+
+func CreateLevel2HeadersWithAddress(address string, creds *ApiCreds, requestArgs *RequestArgs) (map[string]string, error) {
+	timestamp := int(time.Now().Unix())
+
+	// 优先使用预序列化的body
+	var bodyForSig interface{}
+	if requestArgs.SerializedBody != nil {
+		bodyForSig = *requestArgs.SerializedBody
+	} else {
+		bodyForSig = requestArgs.Body
+	}
+
+	secretBytes, err := creds.DecodedSecret()
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode secret: %w", err)
+	}
+
+	hmacSig, err := BuildHMACSignatureRaw(
+		secretBytes,
+		timestamp,
+		requestArgs.Method,
+		requestArgs.RequestPath,
+		bodyForSig,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]string{
+		PolyAddress:    address,
+		PolySignature:  hmacSig,
+		PolyTimestamp:  strconv.Itoa(timestamp),
+		PolyAPIKey:     creds.APIKey,
+		PolyPassphrase: creds.APIPassphrase,
+	}, nil
 }
 
 // GetBuilderAPIKeysList 列出 builder API key。需要 L2 认证。

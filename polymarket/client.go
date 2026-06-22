@@ -17,25 +17,26 @@ import (
 // 2. Level 1: 需要host, chain_id和私钥，可以访问L1认证端点
 // 3. Level 2: 需要host, chain_id, 私钥和API凭证，可以访问所有端点
 type ClobClient struct {
-	host         string
-	chainID      int
-	signer       *Signer
-	creds        *ApiCreds
-	mode         int
-	builder      *obuilder.OrderBuilder
-	httpClient   *HTTPClient
+	host       string
+	chainID    int
+	address    string
+	signer     *Signer
+	creds      *ApiCreds
+	mode       int
+	builder    *obuilder.OrderBuilder
+	httpClient *HTTPClient
 
 	// V2 扩展
-	sigType         int                                              // V2 signature type
-	funder          string                                           // V2 funder 地址(POLY_1271 时为 deposit wallet)
-	builderConfig   *BuilderConfig                                   // V2 全局 builder 配置
-	builderV2Cache  map[string]*obuilder.ExchangeOrderBuilderV2     // key = contractAddress(lowercased)
-	tokenCondition  map[string]string                                // tokenID -> conditionID
-	marketDetails   map[string]*MarketDetails                        // conditionID -> details
-	feeInfos        map[string]*FeeInfo                              // tokenID -> {rate, exponent}
-	builderFeeRates map[string]*BuilderFeeRate                       // builderCode -> rates
-	cachedVersion   *int                                             // 服务端订单版本(1 或 2)
-	feeSlippage     float64                                          // 平台费率上浮百分比 (0 或 [1,100])
+	sigType         int                                         // V2 signature type
+	funder          string                                      // V2 funder 地址(POLY_1271 时为 deposit wallet)
+	builderConfig   *BuilderConfig                              // V2 全局 builder 配置
+	builderV2Cache  map[string]*obuilder.ExchangeOrderBuilderV2 // key = contractAddress(lowercased)
+	tokenCondition  map[string]string                           // tokenID -> conditionID
+	marketDetails   map[string]*MarketDetails                   // conditionID -> details
+	feeInfos        map[string]*FeeInfo                         // tokenID -> {rate, exponent}
+	builderFeeRates map[string]*BuilderFeeRate                  // builderCode -> rates
+	cachedVersion   *int                                        // 服务端订单版本(1 或 2)
+	feeSlippage     float64                                     // 平台费率上浮百分比 (0 或 [1,100])
 
 	// 本地缓存(V1)
 	tickSizes map[string]TickSize
@@ -55,7 +56,7 @@ type ClobClient struct {
 // creds: API凭证（可选）
 // signatureType: 签名类型（0=EOA, 1=Email/Magic, 2=Browser proxy，可选）
 // funder: 资金持有者地址（用于代理钱包，可选）
-func NewClobClient(host string, chainID int, privateKey string, creds *ApiCreds, signatureType *int, funder string) (*ClobClient, error) {
+func NewClobClient(host string, chainID int, privateKey string, address string, creds *ApiCreds, signatureType *int, funder string) (*ClobClient, error) {
 	// 移除host末尾的斜杠
 	if strings.HasSuffix(host, "/") {
 		host = host[:len(host)-1]
@@ -74,6 +75,7 @@ func NewClobClient(host string, chainID int, privateKey string, creds *ApiCreds,
 		marketDetails:   make(map[string]*MarketDetails),
 		feeInfos:        make(map[string]*FeeInfo),
 		builderFeeRates: make(map[string]*BuilderFeeRate),
+		address:         address,
 	}
 
 	// 创建签名器（如果提供了私钥）
@@ -223,11 +225,11 @@ func (c *ClobClient) CreateLevel2HeadersInternal(method, path string, body inter
 		}
 		bodyStr = string(bodyJSON)
 	}
-	
+
 	requestArgs := &RequestArgs{
-		Method:        method,
-		RequestPath:   path,
-		Body:          body,
+		Method:         method,
+		RequestPath:    path,
+		Body:           body,
 		SerializedBody: &bodyStr,
 	}
 
@@ -287,4 +289,3 @@ func (c *ClobClient) CreateOrderForRFQ(args *rfq.OrderCreationArgs) (*rfq.Signed
 		Signature:     "0x" + common.Bytes2Hex(signedOrder.Signature),
 	}, nil
 }
-

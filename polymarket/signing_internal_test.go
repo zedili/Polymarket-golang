@@ -131,13 +131,13 @@ func TestNewClobClientRejectsInvalidFunder(t *testing.T) {
 		"deadbeef", // 无 0x 前缀且不是 40 chars
 	}
 	for _, bad := range cases {
-		_, err := NewClobClient("http://localhost", 137, pk, nil, nil, bad)
+		_, err := NewClobClient("http://localhost", 137, pk, "", nil, nil, bad)
 		if err == nil {
 			t.Errorf("funder=%q should have been rejected", bad)
 		}
 	}
 	// 合法地址(20 字节, 40 hex chars)应当通过
-	if _, err := NewClobClient("http://localhost", 137, pk, nil, nil, "0x"+strings.Repeat("ab", 20)); err != nil {
+	if _, err := NewClobClient("http://localhost", 137, pk, "", nil, nil, "0x"+strings.Repeat("ab", 20)); err != nil {
 		t.Errorf("valid funder rejected: %v", err)
 	}
 }

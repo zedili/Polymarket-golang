@@ -6,16 +6,17 @@
 //   - SDK 在下单前会自动调用 /version 探测服务器期望的版本,失败时自动重试
 //
 // 环境变量:
-//   PRIVATE_KEY      EOA 私钥(必填)
-//   TOKEN_ID         条件代币 ID(必填)
-//   PRICE            限价(默认 0.5)
-//   SIZE             份额(默认 5)
-//   SIDE             BUY / SELL(默认 BUY)
-//   BUILDER_CODE     bytes32 builder code(可选)
-//   ORDER_TYPE       GTC / GTD / FOK / FAK(默认 GTC)
-//   CHAIN_ID         137 / 80002(默认 137)
-//   CLOB_HOST        默认 https://clob.polymarket.com
-//   CLOB_API_KEY/CLOB_SECRET/CLOB_PASSPHRASE  L2 凭证(可选,缺失会自动 derive)
+//
+//	PRIVATE_KEY      EOA 私钥(必填)
+//	TOKEN_ID         条件代币 ID(必填)
+//	PRICE            限价(默认 0.5)
+//	SIZE             份额(默认 5)
+//	SIDE             BUY / SELL(默认 BUY)
+//	BUILDER_CODE     bytes32 builder code(可选)
+//	ORDER_TYPE       GTC / GTD / FOK / FAK(默认 GTC)
+//	CHAIN_ID         137 / 80002(默认 137)
+//	CLOB_HOST        默认 https://clob.polymarket.com
+//	CLOB_API_KEY/CLOB_SECRET/CLOB_PASSPHRASE  L2 凭证(可选,缺失会自动 derive)
 package main
 
 import (
@@ -53,7 +54,7 @@ func main() {
 	orderType := polymarket.OrderType(envOr("ORDER_TYPE", "GTC"))
 
 	// 1. 创建客户端(默认 sigType=0 EOA)
-	client, err := polymarket.NewClobClient(host, chainID, pk, nil, nil, "")
+	client, err := polymarket.NewClobClient(host, chainID, pk, "", nil, nil, "")
 	if err != nil {
 		log.Fatalf("new client: %v", err)
 	}
