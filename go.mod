@@ -1,4 +1,6 @@
-module github.com/0xNetuser/Polymarket-golang
+//module github.com/0xNetuser/Polymarket-golang
+// 改为：
+module github.com/zedili/Polymarket-golang
 
 go 1.24.0
 
